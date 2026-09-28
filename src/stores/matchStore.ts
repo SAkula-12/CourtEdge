@@ -100,6 +100,8 @@ interface MatchState {
   // Offline sync (Section 19)
   isOnline: boolean;
   unsyncedCount: number;
+  isSyncing: boolean;
+  syncPendingMatches: () => Promise<void>;
 
   // Actions
   startSetup: () => void;
@@ -116,6 +118,8 @@ interface MatchState {
   togglePointFlag: (flag: CriticalPointFlagType) => void;
   dismissPressurePrompt: () => void;
   undoLastPoint: () => Promise<void>;
+  finishMatch: (reason?: 'COMPLETED' | 'PLAYER_FORFEIT' | 'OPPONENT_FORFEIT' | 'CANCEL') => Promise<void>;
+  resetMatch: () => void;
   saveGameNote: (text: string) => Promise<void>;
   saveMatchNote: (text: string) => Promise<void>;
   refreshSyncStatus: () => Promise<void>;
@@ -253,6 +257,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
   // Sync
   isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
   unsyncedCount: 0,
+  isSyncing: false,
 
   /* ---- Lifecycle ---- */
 
@@ -690,6 +695,53 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     });
   },
 
+  finishMatch: async (reason = 'COMPLETED') => {
+    const state = get();
+    if (reason === 'CANCEL') {
+      if (state.matchId) {
+        await db.matches.update(state.matchId, { status: 'ABANDONED' });
+      }
+      get().resetMatch();
+      return;
+    }
+
+    if (state.matchId) {
+      await db.matches.update(state.matchId, { status: 'COMPLETED' });
+    }
+
+    const newScore = { ...state.score };
+    const setsToWin = getSetsToWin(state.setup?.format || 'BEST_OF_3');
+
+    if (reason === 'PLAYER_FORFEIT') {
+      newScore.opponentSets = setsToWin;
+    } else if (reason === 'OPPONENT_FORFEIT') {
+      newScore.playerSets = setsToWin;
+    }
+
+    set({ phase: 'FINISHED', score: newScore });
+  },
+
+  resetMatch: () => {
+    set({
+      phase: 'IDLE',
+      matchId: null,
+      setup: null,
+      score: { ...initialScore },
+      pendingPointWinner: null,
+      pendingClassification: null,
+      currentSetId: null,
+      currentGameId: null,
+      pointsInGame: 0,
+      setsPlayed: [],
+      pendingPointNote: '',
+      pendingPointFlags: [],
+      pressureContext: null,
+      pressurePromptDismissed: false,
+      undoStack: [],
+      canUndo: false,
+    });
+  },
+
   /* ---- Notes (Section 16) ---- */
 
   saveGameNote: async (text) => {
@@ -729,6 +781,29 @@ export const useMatchStore = create<MatchState>((set, get) => ({
   },
 
   setOnlineStatus: (online) => set({ isOnline: online }),
+
+  syncPendingMatches: async () => {
+    const { isOnline, isSyncing } = get();
+    if (!isOnline || isSyncing) return;
+
+    set({ isSyncing: true });
+
+    try {
+      const unsyncedMatches = await db.matches.where('synced').equals(0).toArray();
+      for (const match of unsyncedMatches) {
+        // Simulate background sync processing
+        await new Promise((res) => setTimeout(res, 200));
+        await db.matches.update(match.id, { synced: 1 });
+        const remaining = await db.matches.where('synced').equals(0).count();
+        set({ unsyncedCount: remaining });
+      }
+    } catch (error) {
+      console.error('Sync failed:', error);
+    } finally {
+      set({ isSyncing: false });
+      await get().refreshSyncStatus();
+    }
+  },
 
   /* ---- Display helpers ---- */
 

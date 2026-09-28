@@ -1,12 +1,16 @@
 "use client";
 
+import { useState } from "react";
 import { useMatchStore } from "@/stores/matchStore";
 import { PointClassification } from "@/models/types";
-import { Undo2 } from "lucide-react";
+import { Undo2, CheckCircle2, ArrowRight, Check } from "lucide-react";
 import { CriticalPointFlags } from "./CriticalPointFlags";
 import { PressurePrompt } from "./PressurePrompt";
 import { PointNoteInput, NotesPanel } from "./NotesPanel";
 import { SyncIndicator } from "./SyncIndicator";
+import { FlaggedPointsSummary } from "./FlaggedPointsSummary";
+import { NotesLog } from "./NotesLog";
+import { FinishMatchModal } from "./FinishMatchModal";
 
 /* ---------- Unified classification options (same for both players) ---------- */
 
@@ -83,12 +87,16 @@ function ScoreDisplay() {
 /* ---------- Main Scoring Interface ---------- */
 
 export function ScoringInterface() {
-  const { phase, setup, pendingPointWinner, score, canUndo } = useMatchStore();
+  const { phase, setup, pendingPointWinner, score, canUndo, matchId } = useMatchStore();
   const selectPointWinner = useMatchStore((s) => s.selectPointWinner);
   const selectClassification = useMatchStore((s) => s.selectClassification);
   const confirmShotType = useMatchStore((s) => s.confirmShotType);
   const cancelPointDetail = useMatchStore((s) => s.cancelPointDetail);
   const undoLastPoint = useMatchStore((s) => s.undoLastPoint);
+  const finishMatch = useMatchStore((s) => s.finishMatch);
+  const resetMatch = useMatchStore((s) => s.resetMatch);
+
+  const [isFinishModalOpen, setIsFinishModalOpen] = useState(false);
 
   const playerLabel = setup?.playerName || "Player";
   const opponentLabel = setup?.opponentName || "Opponent";
@@ -98,7 +106,14 @@ export function ScoringInterface() {
     const winner = score.playerSets > score.opponentSets ? playerLabel : opponentLabel;
     return (
       <div className="max-w-lg mx-auto p-6 md:p-10 text-center animate-in fade-in">
-        <div className="text-6xl mb-6">🏆</div>
+        <div className="text-6xl mb-4">🏆</div>
+        
+        {/* Saved confirmation badge */}
+        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold mb-4">
+          <Check size={14} className="shrink-0" />
+          <span>Match data saved to local storage</span>
+        </div>
+
         <h1 className="text-3xl font-bold mb-2">Match Complete</h1>
         <p className="text-slate-400 mb-8">
           <span className="text-white font-semibold">{winner}</span> wins!{" "}
@@ -106,23 +121,32 @@ export function ScoringInterface() {
         </p>
         <ScoreDisplay />
 
-        {/* Undo from finished state */}
-        {canUndo && (
-          <button
-            onClick={undoLastPoint}
-            className="mt-4 flex items-center gap-2 mx-auto px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-medium hover:bg-slate-700 hover:text-white transition-all border border-slate-700"
-          >
-            <Undo2 size={14} />
-            Undo Last Point
-          </button>
-        )}
+        {/* Breakdown of flagged points (Critical, Important, Review) */}
+        <FlaggedPointsSummary matchId={matchId} />
 
-        <button
-          onClick={() => window.location.reload()}
-          className="mt-4 px-8 py-3 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-500 transition-colors"
-        >
-          New Match
-        </button>
+        {/* Dedicated Notes Log (Match Notes & Point Notes) */}
+        <NotesLog matchId={matchId} />
+
+        {/* Primary Actions: Continue & New Match */}
+        <div className="mt-8 flex flex-col gap-3 max-w-xs mx-auto">
+          <button
+            onClick={() => resetMatch()}
+            className="w-full flex items-center justify-center gap-2 py-3.5 px-6 rounded-xl bg-blue-600 text-white font-bold text-base hover:bg-blue-500 shadow-lg shadow-blue-600/25 active:scale-95 transition-all"
+          >
+            <span>Continue</span>
+            <ArrowRight size={18} />
+          </button>
+
+          {canUndo && (
+            <button
+              onClick={undoLastPoint}
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-medium hover:bg-slate-700 hover:text-white transition-all border border-slate-700"
+            >
+              <Undo2 size={14} />
+              Undo Last Point
+            </button>
+          )}
+        </div>
 
         {/* Match notes panel */}
         <div className="mt-6">
@@ -130,7 +154,7 @@ export function ScoringInterface() {
         </div>
 
         {/* Sync status */}
-        <div className="mt-4 flex justify-center">
+        <div className="mt-6 flex justify-center">
           <SyncIndicator />
         </div>
       </div>
@@ -140,6 +164,18 @@ export function ScoringInterface() {
   /* ---- Live scoring ---- */
   return (
     <div className="max-w-lg mx-auto p-4 md:p-10 animate-in fade-in">
+      {/* Finish match options modal */}
+      <FinishMatchModal
+        isOpen={isFinishModalOpen}
+        onClose={() => setIsFinishModalOpen(false)}
+        playerName={playerLabel}
+        opponentName={opponentLabel}
+        onSelectOption={(reason) => {
+          setIsFinishModalOpen(false);
+          finishMatch(reason);
+        }}
+      />
+
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl md:text-2xl font-bold">Live Scoring</h1>
         <div className="flex items-center gap-3">
@@ -148,6 +184,14 @@ export function ScoringInterface() {
               Tiebreak
             </span>
           )}
+          <button
+            onClick={() => setIsFinishModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-semibold transition-all"
+            title="Finish match options"
+          >
+            <CheckCircle2 size={13} />
+            <span>Game Done</span>
+          </button>
           <SyncIndicator />
         </div>
       </div>
@@ -179,16 +223,35 @@ export function ScoringInterface() {
               </button>
             </div>
 
-            {/* Undo button */}
-            {canUndo && (
-              <button
-                onClick={undoLastPoint}
-                className="mt-4 w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800/60 text-slate-400 text-sm font-medium hover:bg-slate-800 hover:text-white transition-all border border-slate-700/50"
-              >
-                <Undo2 size={14} />
-                Undo Last Point
-              </button>
-            )}
+            {/* Bottom Controls: Dynamic stretching Game Done when no Undo */}
+            <div className="mt-4">
+              {!canUndo ? (
+                <button
+                  onClick={() => setIsFinishModalOpen(true)}
+                  className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 text-sm font-semibold transition-all shadow-md active:scale-95"
+                >
+                  <CheckCircle2 size={15} />
+                  <span>Game Done</span>
+                </button>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={undoLastPoint}
+                    className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800/60 text-slate-400 text-sm font-medium hover:bg-slate-800 hover:text-white transition-all border border-slate-700/50"
+                  >
+                    <Undo2 size={14} />
+                    Undo Last Point
+                  </button>
+                  <button
+                    onClick={() => setIsFinishModalOpen(true)}
+                    className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 text-sm font-semibold transition-all"
+                  >
+                    <CheckCircle2 size={15} />
+                    <span>Game Done</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </>
         )}
 
@@ -214,7 +277,9 @@ export function ScoringInterface() {
             </div>
 
             <div className="grid grid-cols-1 gap-3">
-              {CLASSIFICATIONS.map((btn) => (
+              {CLASSIFICATIONS.filter(
+                (btn) => pendingPointWinner === score.currentServer || btn.value !== PointClassification.ACE
+              ).map((btn) => (
                 <button
                   key={btn.value}
                   onClick={() => selectClassification(btn.value)}

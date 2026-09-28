@@ -42,6 +42,38 @@ interface SpeechRecognitionConstructor {
   new (): SpeechRecognitionInstance;
 }
 
+const TENNIS_VOCAB: Record<string, string> = {
+  'juice': 'deuce',
+  'add out': 'ad-out',
+  'ad out': 'ad-out',
+  'add in': 'ad-in',
+  'ad in': 'ad-in',
+  'four hand': 'forehand',
+  'for hand': 'forehand',
+  'back hand': 'backhand',
+  'unforced error': 'unforced error',
+  'un forced error': 'unforced error',
+  'four hand slice': 'forehand slice',
+  'for hand slice': 'forehand slice',
+  'double fault': 'double fault',
+  'brick point': 'break point',
+  'set point': 'set point',
+  'match point': 'match point',
+  'ace': 'ace',
+  'let': 'let',
+  'net': 'net',
+  'love': 'love',
+};
+
+function processTranscript(text: string) {
+  let processed = text;
+  for (const [wrong, right] of Object.entries(TENNIS_VOCAB)) {
+    const regex = new RegExp(`\\b${wrong}\\b`, 'gi');
+    processed = processed.replace(regex, right);
+  }
+  return processed;
+}
+
 /**
  * Hook wrapping the browser-native Web Speech API (SpeechRecognition).
  * Returns a simple { transcript, isListening, toggle, reset } API.
@@ -54,6 +86,10 @@ export function useSpeechToText() {
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+
+  const shouldListenRef = useRef(false);
+  const accumulatedRef = useRef("");
+  const latestTranscriptRef = useRef("");
 
   useEffect(() => {
     // Feature-detect — the API is prefixed in most browsers
@@ -71,25 +107,46 @@ export function useSpeechToText() {
       rec.lang = "en-US";
 
       rec.onresult = (event: SpeechRecognitionEvent) => {
-        let finalTranscript = "";
+        let currentTranscript = "";
         for (let i = 0; i < event.results.length; i++) {
-          finalTranscript += event.results[i][0].transcript;
+          currentTranscript += event.results[i][0].transcript;
         }
-        setTranscript(finalTranscript);
+        
+        const combined = accumulatedRef.current 
+          ? accumulatedRef.current + " " + currentTranscript
+          : currentTranscript;
+          
+        const newText = processTranscript(combined.trim());
+        latestTranscriptRef.current = newText;
+        setTranscript(newText);
       };
 
-      rec.onerror = () => {
-        setIsListening(false);
+      rec.onerror = (event: Event) => {
+        // Some errors might just mean no speech detected, we can ignore or let it stop
+        console.warn("Speech recognition error", event);
       };
 
       rec.onend = () => {
-        setIsListening(false);
+        if (shouldListenRef.current) {
+          // Keep listening even if it stops due to silence pause
+          accumulatedRef.current = latestTranscriptRef.current;
+          try {
+            recognitionRef.current?.start();
+          } catch (e) {
+            console.error("Failed to restart speech recognition", e);
+            setIsListening(false);
+            shouldListenRef.current = false;
+          }
+        } else {
+          setIsListening(false);
+        }
       };
 
       recognitionRef.current = rec;
     }
 
     return () => {
+      shouldListenRef.current = false;
       recognitionRef.current?.abort();
     };
   }, []);
@@ -98,18 +155,28 @@ export function useSpeechToText() {
     const rec = recognitionRef.current;
     if (!rec) return;
 
-    if (isListening) {
+    if (shouldListenRef.current) {
+      shouldListenRef.current = false;
       rec.stop();
       setIsListening(false);
     } else {
-      // Reset transcript on each fresh dictation start
+      shouldListenRef.current = true;
+      accumulatedRef.current = "";
+      latestTranscriptRef.current = "";
       setTranscript("");
-      rec.start();
-      setIsListening(true);
+      try {
+        rec.start();
+        setIsListening(true);
+      } catch (e) {
+        console.error(e);
+      }
     }
-  }, [isListening]);
+  }, []);
 
   const reset = useCallback(() => {
+    shouldListenRef.current = false;
+    accumulatedRef.current = "";
+    latestTranscriptRef.current = "";
     setTranscript("");
     if (isListening) {
       recognitionRef.current?.stop();
@@ -119,3 +186,4 @@ export function useSpeechToText() {
 
   return { transcript, isListening, isSupported, toggle, reset };
 }
+
