@@ -3,6 +3,10 @@
 import { useMatchStore } from "@/stores/matchStore";
 import { PointClassification } from "@/models/types";
 import { Undo2 } from "lucide-react";
+import { CriticalPointFlags } from "./CriticalPointFlags";
+import { PressurePrompt } from "./PressurePrompt";
+import { PointNoteInput, NotesPanel } from "./NotesPanel";
+import { SyncIndicator } from "./SyncIndicator";
 
 /* ---------- Unified classification options (same for both players) ---------- */
 
@@ -79,11 +83,12 @@ function ScoreDisplay() {
 /* ---------- Main Scoring Interface ---------- */
 
 export function ScoringInterface() {
-  const { phase, setup, pendingPointWinner, score } = useMatchStore();
+  const { phase, setup, pendingPointWinner, score, canUndo } = useMatchStore();
   const selectPointWinner = useMatchStore((s) => s.selectPointWinner);
   const selectClassification = useMatchStore((s) => s.selectClassification);
   const confirmShotType = useMatchStore((s) => s.confirmShotType);
   const cancelPointDetail = useMatchStore((s) => s.cancelPointDetail);
+  const undoLastPoint = useMatchStore((s) => s.undoLastPoint);
 
   const playerLabel = setup?.playerName || "Player";
   const opponentLabel = setup?.opponentName || "Opponent";
@@ -100,12 +105,34 @@ export function ScoringInterface() {
           {score.playerSets} – {score.opponentSets}
         </p>
         <ScoreDisplay />
+
+        {/* Undo from finished state */}
+        {canUndo && (
+          <button
+            onClick={undoLastPoint}
+            className="mt-4 flex items-center gap-2 mx-auto px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-medium hover:bg-slate-700 hover:text-white transition-all border border-slate-700"
+          >
+            <Undo2 size={14} />
+            Undo Last Point
+          </button>
+        )}
+
         <button
           onClick={() => window.location.reload()}
-          className="mt-8 px-8 py-3 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-500 transition-colors"
+          className="mt-4 px-8 py-3 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-500 transition-colors"
         >
           New Match
         </button>
+
+        {/* Match notes panel */}
+        <div className="mt-6">
+          <NotesPanel />
+        </div>
+
+        {/* Sync status */}
+        <div className="mt-4 flex justify-center">
+          <SyncIndicator />
+        </div>
       </div>
     );
   }
@@ -113,19 +140,27 @@ export function ScoringInterface() {
   /* ---- Live scoring ---- */
   return (
     <div className="max-w-lg mx-auto p-4 md:p-10 animate-in fade-in">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl md:text-2xl font-bold">Live Scoring</h1>
-        {score.isTiebreak && (
-          <span className="text-xs font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 px-3 py-1 rounded-full">
-            Tiebreak
-          </span>
-        )}
+        <div className="flex items-center gap-3">
+          {score.isTiebreak && (
+            <span className="text-xs font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 px-3 py-1 rounded-full">
+              Tiebreak
+            </span>
+          )}
+          <SyncIndicator />
+        </div>
       </div>
 
       <ScoreDisplay />
 
+      {/* Pressure context prompt (Section 18.2) */}
+      <div className="mt-4">
+        <PressurePrompt />
+      </div>
+
       {/* Step 1: Who won the point? */}
-      <div className="mt-8">
+      <div className="mt-6">
         {phase === "PLAYING" && (
           <>
             <p className="text-sm text-slate-400 font-medium mb-4 text-center">Who won the point?</p>
@@ -143,6 +178,17 @@ export function ScoringInterface() {
                 {opponentLabel}
               </button>
             </div>
+
+            {/* Undo button */}
+            {canUndo && (
+              <button
+                onClick={undoLastPoint}
+                className="mt-4 w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800/60 text-slate-400 text-sm font-medium hover:bg-slate-800 hover:text-white transition-all border border-slate-700/50"
+              >
+                <Undo2 size={14} />
+                Undo Last Point
+              </button>
+            )}
           </>
         )}
 
@@ -159,6 +205,12 @@ export function ScoringInterface() {
               <button onClick={cancelPointDetail} className="text-slate-500 hover:text-white transition-colors p-1">
                 <Undo2 size={18} />
               </button>
+            </div>
+
+            {/* Point note + flags BEFORE classification selection */}
+            <div className="space-y-3 mb-4">
+              <PointNoteInput />
+              <CriticalPointFlags />
             </div>
 
             <div className="grid grid-cols-1 gap-3">
@@ -201,6 +253,13 @@ export function ScoringInterface() {
           </div>
         )}
       </div>
+
+      {/* Notes panel (Section 16 — game & match level) */}
+      {(phase === "PLAYING" || phase === "POINT_DETAIL" || phase === "SHOT_DETAIL") && (
+        <div className="mt-6">
+          <NotesPanel />
+        </div>
+      )}
     </div>
   );
 }

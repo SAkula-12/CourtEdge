@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { db } from '@/lib/db';
-import type { DBMatch, DBSet, DBGame, DBPoint } from '@/lib/db';
+import type { DBMatch, DBSet, DBGame, DBPoint, DBNote } from '@/lib/db';
 import { PointClassification } from '@/models/types';
+import type { CriticalPointFlagType } from '@/models/types';
 
 /* ------------------------------------------------------------------ */
 /*  Tennis scoring helpers                                            */
@@ -39,6 +40,38 @@ interface LiveScore {
   advantage?: 'PLAYER' | 'OPPONENT';
 }
 
+/** System-detected pressure context (Section 18.2) */
+export type PressureContext =
+  | 'BREAK_POINT'
+  | 'SET_POINT'
+  | 'MATCH_POINT'
+  | 'BREAK_POINT_AGAINST'
+  | null;
+
+/** Snapshot stored per-point for undo */
+interface UndoSnapshot {
+  score: LiveScore;
+  pointsInGame: number;
+  currentSetId: string;
+  currentGameId: string;
+  setsPlayed: DBSet[];
+  phase: MatchState['phase'];
+  /** DB entities to delete on undo */
+  pointId: string;
+  /** If the point ended a game, we created a new game — need to delete it too */
+  createdGameId?: string;
+  /** If the point ended a set, we created a new set — need to delete it too */
+  createdSetId?: string;
+  /** If the previous game had no winner yet but we set one, revert it */
+  previousGameId?: string;
+  /** If the previous set was updated, revert it */
+  previousSetId?: string;
+  previousSetData?: Partial<DBSet>;
+  previousGameWinner?: 'PLAYER' | 'OPPONENT' | undefined;
+  /** If match status was changed */
+  previousMatchStatus?: 'IN_PROGRESS' | 'COMPLETED';
+}
+
 interface MatchState {
   // State
   phase: 'IDLE' | 'SETUP' | 'PLAYING' | 'POINT_DETAIL' | 'SHOT_DETAIL' | 'FINISHED';
@@ -52,6 +85,22 @@ interface MatchState {
   pointsInGame: number;
   setsPlayed: DBSet[];
 
+  // Point-level metadata (Section 16 & 18)
+  pendingPointNote: string;
+  pendingPointFlags: CriticalPointFlagType[];
+
+  // System detection (Section 18.2)
+  pressureContext: PressureContext;
+  pressurePromptDismissed: boolean;
+
+  // Undo stack (Section 17)
+  undoStack: UndoSnapshot[];
+  canUndo: boolean;
+
+  // Offline sync (Section 19)
+  isOnline: boolean;
+  unsyncedCount: number;
+
   // Actions
   startSetup: () => void;
   confirmSetup: (setup: MatchSetup) => Promise<void>;
@@ -61,6 +110,16 @@ interface MatchState {
   confirmPoint: (classification: PointClassification, shotType?: string) => Promise<void>;
   cancelPointDetail: () => void;
   getPointLabel: (side: 'PLAYER' | 'OPPONENT') => string;
+
+  // New actions
+  setPointNote: (note: string) => void;
+  togglePointFlag: (flag: CriticalPointFlagType) => void;
+  dismissPressurePrompt: () => void;
+  undoLastPoint: () => Promise<void>;
+  saveGameNote: (text: string) => Promise<void>;
+  saveMatchNote: (text: string) => Promise<void>;
+  refreshSyncStatus: () => Promise<void>;
+  setOnlineStatus: (online: boolean) => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -92,6 +151,66 @@ function getSetsToWin(format: string): number {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Pressure context detection (Section 18.2)                         */
+/* ------------------------------------------------------------------ */
+
+function detectPressureContext(
+  score: LiveScore,
+  format: string,
+): PressureContext {
+  const setsToWin = getSetsToWin(format);
+
+  const isReceiverPlayer = score.currentServer === 'OPPONENT';
+  const isReceiverOpponent = score.currentServer === 'PLAYER';
+
+  // In a standard game (non-tiebreak), check for break/set/match points.
+  // A break point exists when the receiver could win the game on this point.
+  if (!score.isTiebreak) {
+    const pp = score.playerPoints;
+    const op = score.opponentPoints;
+
+    // Player can win this game on the next point
+    const playerCanWinGame =
+      (pp >= 3 && pp > op) ||    // 40-anything with lead
+      pp >= 4;                    // past deuce
+
+    // Opponent can win this game on the next point
+    const opponentCanWinGame =
+      (op >= 3 && op > pp) ||
+      op >= 4;
+
+    // Match point: either side is one set from winning AND can win this game → could win the set → could win the match
+    const playerOnSetPoint = (score.playerGames >= 5 && score.playerGames > score.opponentGames) && playerCanWinGame;
+    const opponentOnSetPoint = (score.opponentGames >= 5 && score.opponentGames > score.playerGames) && opponentCanWinGame;
+
+    const playerOnMatchPoint = playerOnSetPoint && (score.playerSets + 1 >= setsToWin);
+    const opponentOnMatchPoint = opponentOnSetPoint && (score.opponentSets + 1 >= setsToWin);
+
+    if (playerOnMatchPoint || opponentOnMatchPoint) return 'MATCH_POINT';
+    if (playerOnSetPoint || opponentOnSetPoint) return 'SET_POINT';
+
+    // Break point: the receiver can win this game
+    if (isReceiverPlayer && playerCanWinGame) return 'BREAK_POINT';
+    if (isReceiverOpponent && opponentCanWinGame) return 'BREAK_POINT_AGAINST';
+  } else {
+    // Tiebreak: set point when one side reaches 6+ and leads by 1+
+    const pp = score.playerPoints;
+    const op = score.opponentPoints;
+
+    const playerOnTBSetPoint = pp >= 6 && pp > op;
+    const opponentOnTBSetPoint = op >= 6 && op > pp;
+
+    const playerOnMatchPoint = playerOnTBSetPoint && (score.playerSets + 1 >= setsToWin);
+    const opponentOnMatchPoint = opponentOnTBSetPoint && (score.opponentSets + 1 >= setsToWin);
+
+    if (playerOnMatchPoint || opponentOnMatchPoint) return 'MATCH_POINT';
+    if (playerOnTBSetPoint || opponentOnTBSetPoint) return 'SET_POINT';
+  }
+
+  return null;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Zustand store                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -119,6 +238,22 @@ export const useMatchStore = create<MatchState>((set, get) => ({
   pointsInGame: 0,
   setsPlayed: [],
 
+  // Point metadata
+  pendingPointNote: '',
+  pendingPointFlags: [],
+
+  // Pressure
+  pressureContext: null,
+  pressurePromptDismissed: false,
+
+  // Undo
+  undoStack: [],
+  canUndo: false,
+
+  // Sync
+  isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
+  unsyncedCount: 0,
+
   /* ---- Lifecycle ---- */
 
   startSetup: () => set({ phase: 'SETUP' }),
@@ -134,7 +269,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       opponentName: setup.opponentName,
       date: new Date().toISOString(),
       surface: setup.surface,
-      format: setup.format,
+      format: setup.format as DBMatch['format'],
       status: 'IN_PROGRESS',
       firstServer: setup.firstServer,
       synced: 0,
@@ -162,6 +297,9 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     await db.sets.add(dbSet);
     await db.games.add(dbGame);
 
+    // Refresh unsynced count
+    const unsyncedCount = await db.matches.where('synced').equals(0).count();
+
     set({
       phase: 'PLAYING',
       matchId,
@@ -170,6 +308,13 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       currentGameId: gameId,
       pointsInGame: 0,
       setsPlayed: [dbSet],
+      undoStack: [],
+      canUndo: false,
+      pendingPointNote: '',
+      pendingPointFlags: [],
+      pressureContext: null,
+      pressurePromptDismissed: false,
+      unsyncedCount,
       score: {
         ...initialScore,
         currentServer: setup.firstServer,
@@ -205,7 +350,22 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     const winner = state.pendingPointWinner!;
     const { score, matchId, currentSetId, currentGameId, pointsInGame } = state;
 
-    // 1. Persist the point
+    // Build undo snapshot BEFORE mutating
+    const undoSnapshot: UndoSnapshot = {
+      score: { ...score },
+      pointsInGame,
+      currentSetId: currentSetId!,
+      currentGameId: currentGameId!,
+      setsPlayed: [...state.setsPlayed],
+      phase: 'PLAYING',
+      pointId: '', // filled after creating the point
+    };
+
+    // 1. Persist the point with note and flags
+    const pointFlags = state.pendingPointFlags.length > 0
+      ? JSON.stringify(state.pendingPointFlags)
+      : undefined;
+
     const dbPoint: DBPoint = {
       id: uid(),
       gameId: currentGameId!,
@@ -215,10 +375,13 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       winner,
       classification,
       shotType,
-      isCritical: 0,
+      note: state.pendingPointNote || undefined,
+      flags: pointFlags,
+      isCritical: state.pendingPointFlags.length > 0 ? 1 : 0,
       timestamp: new Date().toISOString(),
     };
     await db.points.add(dbPoint);
+    undoSnapshot.pointId = dbPoint.id;
 
     // 2. Compute new score
     const newScore = { ...score };
@@ -270,17 +433,29 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     }
 
     if (!gameWon) {
+      // Detect pressure context for the NEXT point
+      const pressure = detectPressureContext(newScore, state.setup!.format);
+      const newUndoStack = [...state.undoStack, undoSnapshot];
+
       set({
         score: newScore,
         pendingPointWinner: null,
+        pendingPointNote: '',
+        pendingPointFlags: [],
         pointsInGame: pointsInGame + 1,
         phase: 'PLAYING',
+        pressureContext: pressure,
+        pressurePromptDismissed: false,
+        undoStack: newUndoStack,
+        canUndo: true,
       });
       return;
     }
 
     // 3. Game won — update DB game record
-    await db.games.update(currentGameId!, { winner: gameWinner });
+    undoSnapshot.previousGameId = currentGameId!;
+    undoSnapshot.previousGameWinner = undefined; // was unset before
+    await db.games.update(currentGameId!, { winner: gameWinner as 'PLAYER' | 'OPPONENT' });
 
     // Update game score
     if (gameWinner === 'PLAYER') newScore.playerGames++;
@@ -329,21 +504,40 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       };
       await db.games.add(newGame);
 
+      undoSnapshot.createdGameId = newGameId;
+
+      const pressure = detectPressureContext(newScore, state.setup!.format);
+      const newUndoStack = [...state.undoStack, undoSnapshot];
+
       set({
         score: newScore,
         pendingPointWinner: null,
+        pendingPointNote: '',
+        pendingPointFlags: [],
         currentGameId: newGameId,
         pointsInGame: 0,
         phase: 'PLAYING',
+        pressureContext: pressure,
+        pressurePromptDismissed: false,
+        undoStack: newUndoStack,
+        canUndo: true,
       });
       return;
     }
 
     // 4. Set won
+    undoSnapshot.previousSetId = currentSetId!;
+    undoSnapshot.previousSetData = {
+      playerGames: score.playerGames,
+      opponentGames: score.opponentGames,
+      winner: undefined,
+      tiebreak: false,
+    };
+
     await db.sets.update(currentSetId!, {
       playerGames: newScore.playerGames,
       opponentGames: newScore.opponentGames,
-      winner: setWinner,
+      winner: setWinner as 'PLAYER' | 'OPPONENT',
       tiebreak: score.isTiebreak,
     });
 
@@ -353,11 +547,19 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     // Check match won
     const setsToWin = getSetsToWin(state.setup!.format);
     if (newScore.playerSets >= setsToWin || newScore.opponentSets >= setsToWin) {
+      undoSnapshot.previousMatchStatus = 'IN_PROGRESS';
       await db.matches.update(matchId!, { status: 'COMPLETED' });
+
+      const newUndoStack = [...state.undoStack, undoSnapshot];
       set({
         score: newScore,
         pendingPointWinner: null,
+        pendingPointNote: '',
+        pendingPointFlags: [],
         phase: 'FINISHED',
+        pressureContext: null,
+        undoStack: newUndoStack,
+        canUndo: true,
       });
       return;
     }
@@ -390,16 +592,143 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     };
     await db.games.add(newGame);
 
+    undoSnapshot.createdSetId = newSetId;
+    undoSnapshot.createdGameId = newGameId;
+
+    const pressure = detectPressureContext(newScore, state.setup!.format);
+    const newUndoStack = [...state.undoStack, undoSnapshot];
+
     set({
       score: newScore,
       pendingPointWinner: null,
+      pendingPointNote: '',
+      pendingPointFlags: [],
       currentSetId: newSetId,
       currentGameId: newGameId,
       pointsInGame: 0,
       setsPlayed: [...state.setsPlayed, newSet],
       phase: 'PLAYING',
+      pressureContext: pressure,
+      pressurePromptDismissed: false,
+      undoStack: newUndoStack,
+      canUndo: true,
     });
   },
+
+  /* ---- Point metadata (Section 16 & 18) ---- */
+
+  setPointNote: (note) => set({ pendingPointNote: note }),
+
+  togglePointFlag: (flag) => {
+    const current = get().pendingPointFlags;
+    if (current.includes(flag)) {
+      set({ pendingPointFlags: current.filter((f) => f !== flag) });
+    } else {
+      set({ pendingPointFlags: [...current, flag] });
+    }
+  },
+
+  dismissPressurePrompt: () => set({ pressurePromptDismissed: true }),
+
+  /* ---- Undo (Section 17) ---- */
+
+  undoLastPoint: async () => {
+    const state = get();
+    if (state.undoStack.length === 0) return;
+
+    const snapshot = state.undoStack[state.undoStack.length - 1];
+    const newStack = state.undoStack.slice(0, -1);
+
+    // 1. Delete the point from Dexie
+    await db.points.delete(snapshot.pointId);
+
+    // 2. If a new game was created (game boundary crossed), delete it
+    if (snapshot.createdGameId) {
+      await db.games.delete(snapshot.createdGameId);
+    }
+
+    // 3. If a new set was created, delete it
+    if (snapshot.createdSetId) {
+      await db.sets.delete(snapshot.createdSetId);
+    }
+
+    // 4. Revert game winner if we set one
+    if (snapshot.previousGameId) {
+      await db.games.update(snapshot.previousGameId, { winner: snapshot.previousGameWinner as 'PLAYER' | 'OPPONENT' | undefined });
+    }
+
+    // 5. Revert set data if we updated it
+    if (snapshot.previousSetId && snapshot.previousSetData) {
+      await db.sets.update(snapshot.previousSetId, snapshot.previousSetData);
+    }
+
+    // 6. Revert match status if changed
+    if (snapshot.previousMatchStatus && state.matchId) {
+      await db.matches.update(state.matchId, { status: snapshot.previousMatchStatus });
+    }
+
+    // 7. Restore in-memory state
+    const pressure = state.setup
+      ? detectPressureContext(snapshot.score, state.setup.format)
+      : null;
+
+    set({
+      score: snapshot.score,
+      pointsInGame: snapshot.pointsInGame,
+      currentSetId: snapshot.currentSetId,
+      currentGameId: snapshot.currentGameId,
+      setsPlayed: snapshot.setsPlayed,
+      phase: snapshot.phase,
+      pendingPointWinner: null,
+      pendingClassification: null,
+      pendingPointNote: '',
+      pendingPointFlags: [],
+      pressureContext: pressure,
+      pressurePromptDismissed: false,
+      undoStack: newStack,
+      canUndo: newStack.length > 0,
+    });
+  },
+
+  /* ---- Notes (Section 16) ---- */
+
+  saveGameNote: async (text) => {
+    const state = get();
+    if (!text.trim() || !state.matchId || !state.currentGameId) return;
+
+    const note: DBNote = {
+      id: uid(),
+      matchId: state.matchId,
+      scope: 'GAME',
+      scopeRefId: state.currentGameId,
+      text: text.trim(),
+      createdAt: new Date().toISOString(),
+    };
+    await db.notes.add(note);
+  },
+
+  saveMatchNote: async (text) => {
+    const state = get();
+    if (!text.trim() || !state.matchId) return;
+
+    const note: DBNote = {
+      id: uid(),
+      matchId: state.matchId,
+      scope: 'MATCH',
+      text: text.trim(),
+      createdAt: new Date().toISOString(),
+    };
+    await db.notes.add(note);
+  },
+
+  /* ---- Sync status (Section 19) ---- */
+
+  refreshSyncStatus: async () => {
+    const count = await db.matches.where('synced').equals(0).count();
+    set({ unsyncedCount: count });
+  },
+
+  setOnlineStatus: (online) => set({ isOnline: online }),
 
   /* ---- Display helpers ---- */
 

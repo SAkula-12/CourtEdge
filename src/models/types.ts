@@ -61,6 +61,7 @@ export interface Point {
   shotType?: 'FOREHAND' | 'BACKHAND' | 'SERVE' | 'VOLLEY' | 'SLICE' | 'OTHER';
   observations: Observation[];
   flags: CriticalPointFlag[];
+  note?: string;
 }
 
 export enum PointClassification {
@@ -72,6 +73,8 @@ export enum PointClassification {
   OPPONENT_WINNER = 'OPPONENT_WINNER',
   OPPONENT_FORCED_ERROR = 'OPPONENT_FORCED_ERROR'
 }
+
+export type CriticalPointFlagType = 'IMPORTANT' | 'CRITICAL' | 'WORTH_REVIEWING' | 'SYSTEM_DETECTED';
 
 export interface Observer {
   id: string;
@@ -92,6 +95,19 @@ export interface CriticalPointFlag {
   id: string;
   pointId: string;
   observerId: string;
-  type: 'IMPORTANT' | 'CRITICAL' | 'SYSTEM_DETECTED';
+  type: CriticalPointFlagType;
   timestamp: Date;
+}
+
+/** Broader notes attached at game or match level (Section 16) */
+export type NoteScopeLevel = 'POINT' | 'GAME' | 'MATCH';
+
+export interface MatchNote {
+  id: string;
+  matchId: string;
+  scope: NoteScopeLevel;
+  /** References: gameId for GAME-level, or undefined for MATCH-level */
+  scopeRefId?: string;
+  text: string;
+  createdAt: string;
 }
