@@ -44,7 +44,7 @@ export default function GametimePage() {
   // Resume a suspended match by changing its status to IN_PROGRESS, then recovering
   const handleResumeMatch = async (matchId: string) => {
     await db.matches.update(matchId, { status: 'IN_PROGRESS' });
-    await recoverActiveMatch();
+    await recoverActiveMatch(matchId);
   };
 
   // Loading state: Prevent Match Setup Form flash while restoring match

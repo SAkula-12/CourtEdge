@@ -150,7 +150,7 @@ interface MatchState {
 
   // Session recovery & DB hydration
   isRecovering: boolean;
-  recoverActiveMatch: () => Promise<boolean>;
+  recoverActiveMatch: (matchIdToRecover?: string) => Promise<boolean>;
 }
 
 
@@ -1088,10 +1088,10 @@ export const useMatchStore = create<MatchState>((set, get) => ({
 
   /* ---- Session Recovery & Database Hydration ---- */
 
-  recoverActiveMatch: async () => {
-    // If we are already in an active session in memory, don't overwrite
+  recoverActiveMatch: async (matchIdToRecover?: string) => {
+    // If we are already in an active session in memory, don't overwrite unless explicitly requested
     const current = get();
-    if (current.phase !== 'IDLE' && current.matchId) {
+    if (current.phase !== 'IDLE' && current.matchId && !matchIdToRecover) {
       return true;
     }
 
@@ -1110,20 +1110,25 @@ export const useMatchStore = create<MatchState>((set, get) => ({
         }
       }
 
-      // Query Dexie database for the most recent match that actually has points played
-      const activeCandidates = (await db.matches.toArray())
-        .filter((m) => {
-          const st = (m.status || '').toLowerCase();
-          return st === 'in_progress' || st === 'in-progress' || st === 'suspended';
-        })
-        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
       let activeMatch: DBMatch | undefined = undefined;
-      for (const candidate of activeCandidates) {
-        const ptCount = await db.points.where('matchId').equals(candidate.id).count();
-        if (ptCount > 0) {
-          activeMatch = candidate;
-          break;
+
+      if (matchIdToRecover) {
+        activeMatch = await db.matches.get(matchIdToRecover);
+      } else {
+        // Query Dexie database for the most recent match that actually has points played
+        const activeCandidates = (await db.matches.toArray())
+          .filter((m) => {
+            const st = (m.status || '').toLowerCase();
+            return st === 'in_progress' || st === 'in-progress' || st === 'suspended';
+          })
+          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+        for (const candidate of activeCandidates) {
+          const ptCount = await db.points.where('matchId').equals(candidate.id).count();
+          if (ptCount > 0) {
+            activeMatch = candidate;
+            break;
+          }
         }
       }
 
