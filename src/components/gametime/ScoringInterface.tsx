@@ -113,11 +113,10 @@ export function PointNoteInput() {
         if (finalChunk.trim()) {
           const processed = processTennisVocab(finalChunk.trim());
           // State Unification: SpeechRecognition transcript output feeds directly into noteText
-          setNoteText((prev) => {
-            const next = prev ? `${prev} ${processed}` : processed;
-            setPointNote(next);
-            return next;
-          });
+          const prev = useMatchStore.getState().pendingPointNote || "";
+          const next = prev ? `${prev} ${processed}` : processed;
+          setNoteText(next);
+          setPointNote(next);
         }
       };
 
@@ -160,11 +159,10 @@ export function PointNoteInput() {
       isListeningRef.current = false;
       if (interimTextRef.current.trim()) {
         const processed = processTennisVocab(interimTextRef.current.trim());
-        setNoteText((prev) => {
-          const next = prev ? `${prev} ${processed}` : processed;
-          setPointNote(next);
-          return next;
-        });
+        const prev = useMatchStore.getState().pendingPointNote || "";
+        const next = prev ? `${prev} ${processed}` : processed;
+        setNoteText(next);
+        setPointNote(next);
         setInterimText("");
         interimTextRef.current = "";
       }
@@ -188,11 +186,10 @@ export function PointNoteInput() {
   // Specification 1: Append tag text to note state with leading space if note is not empty
   const handleTagClick = (tag: string) => {
     triggerHaptic(40);
-    setNoteText((prev) => {
-      const next = prev ? `${prev} ${tag}` : tag;
-      setPointNote(next);
-      return next;
-    });
+    const prev = useMatchStore.getState().pendingPointNote || "";
+    const next = prev ? `${prev} ${tag}` : tag;
+    setNoteText(next);
+    setPointNote(next);
   };
 
   // Specification 2: Standard mobile keyboard onChange feeds into exact same state (noteText)
