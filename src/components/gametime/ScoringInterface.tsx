@@ -14,6 +14,7 @@ import { NotesLog } from "./NotesLog";
 import { FinishMatchModal } from "./FinishMatchModal";
 import { MatchShareQR } from "@/components/share/MatchShareQR";
 import { GuestMatchTransferUI } from "./GuestMatchTransferUI";
+import { PlayByPlayTimeline } from "./PlayByPlayTimeline";
 import { triggerHaptic } from "@/lib/haptics";
 
 /* ---------- Quick Tags Array (Specification 1) ---------- */
@@ -884,8 +885,19 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
       };
       bc.postMessage({ type: 'SYNC_STATE', state: initialSerializableState });
 
-      bc.onmessage = (event) => {
-        if (event.data.type === 'OBSERVER_OBSERVATION') {
+      bc.onmessage = async (event) => {
+        if (event.data.type === 'OBSERVER_CONFIRM_POINT') {
+          const { winner, classification, shotType, note, flags } = event.data.payload;
+          useMatchStore.setState({
+            pendingPointWinner: winner,
+            pendingClassification: classification,
+            pendingPointNote: note || '',
+            pendingPointFlags: flags || [],
+          });
+          await useMatchStore.getState().confirmPoint(classification, shotType);
+        } else if (event.data.type === 'OBSERVER_UNDO_POINT') {
+          await useMatchStore.getState().undoLastPoint();
+        } else if (event.data.type === 'OBSERVER_OBSERVATION') {
           console.log('[Mock Backend] Received observer observation:', event.data.payload);
         }
       };
@@ -1148,10 +1160,20 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
               </button>
             </div>
 
-            {/* Bottom Controls: Dynamic stretching Game Done when no Undo */}
-            {role !== 'OBSERVER' && (
-              <div className="mt-4">
-                {!canUndo ? (
+            {/* Bottom Controls */}
+            <div className="mt-4">
+              {role === 'OBSERVER' ? (
+                canUndo && (
+                  <button
+                    onClick={() => { triggerHaptic(); undoLastPoint(); }}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800/60 text-slate-400 text-sm font-medium hover:bg-slate-800 hover:text-white transition-all border border-slate-700/50"
+                  >
+                    <Undo2 size={14} />
+                    Undo Last Point
+                  </button>
+                )
+              ) : (
+                !canUndo ? (
                   <button
                     onClick={() => { triggerHaptic(); setIsFinishModalOpen(true); }}
                     className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 text-sm font-semibold transition-all shadow-md active:scale-95"
@@ -1176,9 +1198,9 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
                       <span>Game Done</span>
                     </button>
                   </div>
-                )}
-              </div>
-            )}
+                )
+              )}
+            </div>
           </>
         )}
 
@@ -1252,6 +1274,9 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
           <NotesPanel />
         </div>
       )}
+
+      {/* Play-by-Play Match History Timeline */}
+      <PlayByPlayTimeline />
     </div>
   );
 }

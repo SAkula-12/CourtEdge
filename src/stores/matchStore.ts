@@ -1016,6 +1016,17 @@ export const useMatchStore = create<MatchState>((set, get) => ({
 
   undoLastPoint: async () => {
     const state = get();
+
+    if (state.role === 'OBSERVER' && state.matchId) {
+      const bc = new BroadcastChannel(`courtedge-live-score-${state.matchId}`);
+      bc.postMessage({
+        type: 'OBSERVER_UNDO_POINT',
+        timestamp: new Date().toISOString(),
+      });
+      bc.close();
+      return;
+    }
+
     if (state.undoStack.length === 0) return;
 
     const snapshot = state.undoStack[state.undoStack.length - 1];
