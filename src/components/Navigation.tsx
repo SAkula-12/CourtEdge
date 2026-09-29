@@ -8,11 +8,13 @@ import { Home, BookOpen, BarChart2, PlayCircle, User, Cloud, CloudOff, Wifi, Wif
 /* ---------- Offline Sync Indicator (Specification 4) ---------- */
 
 function OfflineSyncIndicator() {
-  const [isOnline, setIsOnline] = useState(
-    typeof navigator !== "undefined" ? navigator.onLine : true
-  );
+  const [mounted, setMounted] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
 
   useEffect(() => {
+    setMounted(true);
+    setIsOnline(navigator.onLine);
+
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
 
@@ -24,6 +26,15 @@ function OfflineSyncIndicator() {
       window.removeEventListener("offline", handleOffline);
     };
   }, []);
+
+  if (!mounted) {
+    // Render a matching placeholder during SSR to prevent hydration mismatches
+    return (
+      <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/50 opacity-0">
+        <div className="w-4 h-4" />
+      </div>
+    );
+  }
 
   if (isOnline) {
     return (
@@ -121,11 +132,13 @@ export function Navigation() {
 /* ---------- Mobile Offline Bar ---------- */
 
 function MobileOfflineBar() {
-  const [isOnline, setIsOnline] = useState(
-    typeof navigator !== "undefined" ? navigator.onLine : true
-  );
+  const [mounted, setMounted] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
 
   useEffect(() => {
+    setMounted(true);
+    setIsOnline(navigator.onLine);
+
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
 
@@ -138,7 +151,7 @@ function MobileOfflineBar() {
     };
   }, []);
 
-  if (isOnline) return null;
+  if (!mounted || isOnline) return null;
 
   return (
     <div className="flex items-center justify-center gap-2 py-1.5 bg-amber-500/15 border-b border-amber-500/20">
