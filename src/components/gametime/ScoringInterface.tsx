@@ -595,7 +595,7 @@ function MatchCompletionModal({
 
 /* ---------- Main Scoring Interface ---------- */
 
-export function ScoringInterface() {
+export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBSERVER' }) {
   const { phase, setup, pendingPointWinner, score, canUndo, matchId } = useMatchStore();
   const selectPointWinner = useMatchStore((s) => s.selectPointWinner);
   const selectClassification = useMatchStore((s) => s.selectClassification);
@@ -604,6 +604,11 @@ export function ScoringInterface() {
   const undoLastPoint = useMatchStore((s) => s.undoLastPoint);
   const finishMatch = useMatchStore((s) => s.finishMatch);
   const resetMatch = useMatchStore((s) => s.resetMatch);
+  const setRole = useMatchStore((s) => s.setRole);
+
+  useEffect(() => {
+    setRole(role);
+  }, [role, setRole]);
 
   const [isFinishModalOpen, setIsFinishModalOpen] = useState(false);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
@@ -654,6 +659,55 @@ export function ScoringInterface() {
       }
     };
   }, []);
+
+  /* ---- Real-Time Sync Mockup (BroadcastChannel) ---- */
+  useEffect(() => {
+    if (!matchId) return;
+    const bc = new BroadcastChannel(`courtedge-live-score-${matchId}`);
+    
+    if (role === 'PRIMARY') {
+      const unsub = useMatchStore.subscribe((state, prevState) => {
+        if (state.score !== prevState.score || state.setup !== prevState.setup || state.phase !== prevState.phase) {
+          bc.postMessage({ type: 'SYNC_STATE', state });
+        }
+      });
+      bc.postMessage({ type: 'SYNC_STATE', state: useMatchStore.getState() });
+
+      bc.onmessage = (event) => {
+        if (event.data.type === 'OBSERVER_OBSERVATION') {
+          console.log('[Mock Backend] Received observer observation:', event.data.payload);
+        }
+      };
+
+      return () => {
+        unsub();
+        bc.close();
+      };
+    } else {
+      bc.postMessage({ type: 'REQUEST_STATE' });
+      bc.onmessage = (event) => {
+        if (event.data.type === 'SYNC_STATE') {
+          const s = event.data.state;
+          useMatchStore.setState((prev) => ({
+            ...prev,
+            setup: s.setup,
+            score: s.score,
+            currentSetId: s.currentSetId,
+            currentGameId: s.currentGameId,
+            pointsInGame: s.pointsInGame,
+            setsPlayed: s.setsPlayed,
+            courtSide: s.courtSide,
+            pressureContext: s.pressureContext,
+            // Only sync phase if we aren't currently logging a point
+            phase: (prev.phase === 'POINT_DETAIL' || prev.phase === 'SHOT_DETAIL') ? prev.phase : s.phase,
+            isRecovering: false,
+          }));
+        }
+      };
+
+      return () => bc.close();
+    }
+  }, [matchId, role]);
 
   /* ---- Suspend Match handler ---- */
   const handleSuspend = useCallback(async () => {
@@ -707,26 +761,28 @@ export function ScoringInterface() {
         <NotesLog matchId={matchId} />
 
         {/* Primary Actions */}
-        <div className="mt-8 flex flex-col gap-3 max-w-xs mx-auto">
-          {/* Full-width Finish Match & Save — opens the completion modal */}
-          <button
-            onClick={() => { triggerHaptic(60); setShowCompletionModal(true); }}
-            className="w-full flex items-center justify-center gap-2.5 py-4 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-base shadow-xl shadow-emerald-600/30 active:scale-95 transition-all"
-          >
-            <CheckCircle2 size={20} />
-            Finish Match & Save
-          </button>
-
-          {canUndo && (
+        {role !== 'OBSERVER' && (
+          <div className="mt-8 flex flex-col gap-3 max-w-xs mx-auto">
+            {/* Full-width Finish Match & Save — opens the completion modal */}
             <button
-              onClick={() => { triggerHaptic(); undoLastPoint(); }}
-              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-medium hover:bg-slate-700 hover:text-white transition-all border border-slate-700"
+              onClick={() => { triggerHaptic(60); setShowCompletionModal(true); }}
+              className="w-full flex items-center justify-center gap-2.5 py-4 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-base shadow-xl shadow-emerald-600/30 active:scale-95 transition-all"
             >
-              <Undo2 size={14} />
-              Undo Last Point
+              <CheckCircle2 size={20} />
+              Finish Match & Save
             </button>
-          )}
-        </div>
+
+            {canUndo && (
+              <button
+                onClick={() => { triggerHaptic(); undoLastPoint(); }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-medium hover:bg-slate-700 hover:text-white transition-all border border-slate-700"
+              >
+                <Undo2 size={14} />
+                Undo Last Point
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Match notes panel */}
         <div className="mt-6">
@@ -761,53 +817,57 @@ export function ScoringInterface() {
         <div className="flex items-center gap-2">
           <TiebreakBadge />
 
-          {/* Share QR Code Button */}
-          <button
-            onClick={() => { triggerHaptic(); setIsShareModalOpen(true); }}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 text-xs font-semibold transition-all"
-            title="Share live match"
-          >
-            <QrCode size={13} />
-            <span className="hidden sm:inline">Share</span>
-          </button>
+          {role !== 'OBSERVER' && (
+            <>
+              {/* Share QR Code Button */}
+              <button
+                onClick={() => { triggerHaptic(); setIsShareModalOpen(true); }}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 text-xs font-semibold transition-all"
+                title="Share live match"
+              >
+                <QrCode size={13} />
+                <span className="hidden sm:inline">Share</span>
+              </button>
 
-          {/* Suspend Match dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => { triggerHaptic(); setShowSuspendMenu(!showSuspendMenu); }}
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-semibold transition-all"
-              title="Suspend match (rain delay)"
-            >
-              <PauseCircle size={13} />
-              <span className="hidden sm:inline">Suspend</span>
-            </button>
-            {showSuspendMenu && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setShowSuspendMenu(false)} />
-                <div className="absolute right-0 top-full mt-1 z-50 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl shadow-black/40 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
-                  <button
-                    onClick={handleSuspend}
-                    className="w-full flex items-center gap-3 px-4 py-3 text-sm text-amber-300 hover:bg-amber-500/10 transition-colors text-left"
-                  >
-                    <CloudRain size={16} className="shrink-0 text-amber-400" />
-                    <div>
-                      <div className="font-semibold">Suspend Match</div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">Rain delay, break, or pause — resume later</div>
+              {/* Suspend Match dropdown */}
+              <div className="relative">
+                <button
+                  onClick={() => { triggerHaptic(); setShowSuspendMenu(!showSuspendMenu); }}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-semibold transition-all"
+                  title="Suspend match (rain delay)"
+                >
+                  <PauseCircle size={13} />
+                  <span className="hidden sm:inline">Suspend</span>
+                </button>
+                {showSuspendMenu && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowSuspendMenu(false)} />
+                    <div className="absolute right-0 top-full mt-1 z-50 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl shadow-black/40 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
+                      <button
+                        onClick={handleSuspend}
+                        className="w-full flex items-center gap-3 px-4 py-3 text-sm text-amber-300 hover:bg-amber-500/10 transition-colors text-left"
+                      >
+                        <CloudRain size={16} className="shrink-0 text-amber-400" />
+                        <div>
+                          <div className="font-semibold">Suspend Match</div>
+                          <div className="text-[11px] text-slate-400 mt-0.5">Rain delay, break, or pause — resume later</div>
+                        </div>
+                      </button>
                     </div>
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
+                  </>
+                )}
+              </div>
 
-          <button
-            onClick={() => { triggerHaptic(); setIsFinishModalOpen(true); }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-semibold transition-all"
-            title="Finish match options"
-          >
-            <CheckCircle2 size={13} />
-            <span>Game Done</span>
-          </button>
+              <button
+                onClick={() => { triggerHaptic(); setIsFinishModalOpen(true); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-semibold transition-all"
+                title="Finish match options"
+              >
+                <CheckCircle2 size={13} />
+                <span>Game Done</span>
+              </button>
+            </>
+          )}
           <SyncIndicator />
         </div>
       </div>
@@ -873,34 +933,36 @@ export function ScoringInterface() {
             </div>
 
             {/* Bottom Controls: Dynamic stretching Game Done when no Undo */}
-            <div className="mt-4">
-              {!canUndo ? (
-                <button
-                  onClick={() => { triggerHaptic(); setIsFinishModalOpen(true); }}
-                  className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 text-sm font-semibold transition-all shadow-md active:scale-95"
-                >
-                  <CheckCircle2 size={15} />
-                  <span>Game Done</span>
-                </button>
-              ) : (
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    onClick={() => { triggerHaptic(); undoLastPoint(); }}
-                    className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800/60 text-slate-400 text-sm font-medium hover:bg-slate-800 hover:text-white transition-all border border-slate-700/50"
-                  >
-                    <Undo2 size={14} />
-                    Undo Last Point
-                  </button>
+            {role !== 'OBSERVER' && (
+              <div className="mt-4">
+                {!canUndo ? (
                   <button
                     onClick={() => { triggerHaptic(); setIsFinishModalOpen(true); }}
-                    className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 text-sm font-semibold transition-all"
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 text-sm font-semibold transition-all shadow-md active:scale-95"
                   >
                     <CheckCircle2 size={15} />
                     <span>Game Done</span>
                   </button>
-                </div>
-              )}
-            </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => { triggerHaptic(); undoLastPoint(); }}
+                      className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800/60 text-slate-400 text-sm font-medium hover:bg-slate-800 hover:text-white transition-all border border-slate-700/50"
+                    >
+                      <Undo2 size={14} />
+                      Undo Last Point
+                    </button>
+                    <button
+                      onClick={() => { triggerHaptic(); setIsFinishModalOpen(true); }}
+                      className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 text-sm font-semibold transition-all"
+                    >
+                      <CheckCircle2 size={15} />
+                      <span>Game Done</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
 

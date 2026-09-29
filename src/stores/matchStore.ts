@@ -86,6 +86,9 @@ interface UndoSnapshot {
 }
 
 interface MatchState {
+  // Role
+  role: 'PRIMARY' | 'OBSERVER';
+
   // State
   phase: 'IDLE' | 'SETUP' | 'PLAYING' | 'POINT_DETAIL' | 'SHOT_DETAIL' | 'FINISHED';
   matchId: string | null;
@@ -131,6 +134,7 @@ interface MatchState {
   confirmPoint: (classification: PointClassification, shotType?: string) => Promise<void>;
   cancelPointDetail: () => void;
   getPointLabel: (side: 'PLAYER' | 'OPPONENT') => string;
+  setRole: (role: 'PRIMARY' | 'OBSERVER') => void;
 
   // New actions
   setPointNote: (note: string) => void;
@@ -336,6 +340,8 @@ const initialScore: LiveScore = {
 };
 
 export const useMatchStore = create<MatchState>((set, get) => ({
+  role: 'PRIMARY',
+  setRole: (role) => set({ role }),
   phase: 'IDLE',
   matchId: null,
   setup: null,
@@ -476,6 +482,31 @@ export const useMatchStore = create<MatchState>((set, get) => ({
 
   confirmPoint: async (classification, shotType) => {
     const state = get();
+    
+    if (state.role === 'OBSERVER' && state.matchId) {
+      const bc = new BroadcastChannel(`courtedge-live-score-${state.matchId}`);
+      bc.postMessage({
+        type: 'OBSERVER_OBSERVATION',
+        payload: {
+          classification,
+          shotType,
+          note: state.pendingPointNote,
+          flags: state.pendingPointFlags,
+          timestamp: new Date().toISOString(),
+        }
+      });
+      bc.close();
+      
+      set({
+        phase: 'PLAYING',
+        pendingPointWinner: null,
+        pendingClassification: null,
+        pendingPointNote: '',
+        pendingPointFlags: [],
+      });
+      return;
+    }
+
     const winner = state.pendingPointWinner!;
     const { score, matchId, currentSetId, currentGameId, pointsInGame, setup } = state;
 
