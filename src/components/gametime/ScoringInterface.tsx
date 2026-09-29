@@ -668,10 +668,36 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
     if (role === 'PRIMARY') {
       const unsub = useMatchStore.subscribe((state, prevState) => {
         if (state.score !== prevState.score || state.setup !== prevState.setup || state.phase !== prevState.phase) {
-          bc.postMessage({ type: 'SYNC_STATE', state });
+          const serializableState = {
+            setup: state.setup,
+            score: state.score,
+            currentSetId: state.currentSetId,
+            currentGameId: state.currentGameId,
+            pointsInGame: state.pointsInGame,
+            setsPlayed: state.setsPlayed,
+            courtSide: state.courtSide,
+            pressureContext: state.pressureContext,
+            phase: state.phase,
+            isRecovering: state.isRecovering,
+          };
+          bc.postMessage({ type: 'SYNC_STATE', state: serializableState });
         }
       });
-      bc.postMessage({ type: 'SYNC_STATE', state: useMatchStore.getState() });
+
+      const currentState = useMatchStore.getState();
+      const initialSerializableState = {
+        setup: currentState.setup,
+        score: currentState.score,
+        currentSetId: currentState.currentSetId,
+        currentGameId: currentState.currentGameId,
+        pointsInGame: currentState.pointsInGame,
+        setsPlayed: currentState.setsPlayed,
+        courtSide: currentState.courtSide,
+        pressureContext: currentState.pressureContext,
+        phase: currentState.phase,
+        isRecovering: currentState.isRecovering,
+      };
+      bc.postMessage({ type: 'SYNC_STATE', state: initialSerializableState });
 
       bc.onmessage = (event) => {
         if (event.data.type === 'OBSERVER_OBSERVATION') {
