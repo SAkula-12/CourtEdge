@@ -548,11 +548,13 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       newScore.tiebreakFirstServer = firstServer;
 
       // Change of ends in tiebreak
-      triggerChangeEnds = shouldChangeEnds(totalTBPointsAfter, tiebreakProcedure);
-      if (triggerChangeEnds) {
-        changeEndsMsg = tiebreakProcedure === 'coman'
-          ? `Coman changeover (point ${totalTBPointsAfter}) — switch sides`
-          : `Tiebreak changeover (${totalTBPointsAfter} points) — switch sides`;
+      if (tiebreakProcedure !== 'manual') {
+        triggerChangeEnds = shouldChangeEnds(totalTBPointsAfter, tiebreakProcedure);
+        if (triggerChangeEnds) {
+          changeEndsMsg = tiebreakProcedure === 'coman'
+            ? `Coman changeover (point ${totalTBPointsAfter}) — switch sides`
+            : `Tiebreak changeover (${totalTBPointsAfter} points) — switch sides`;
+        }
       }
     } else {
       // === Standard game scoring ===
@@ -696,7 +698,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
 
       // Standard changeover: players change ends at the end of the 1st, 3rd, 5th, and every subsequent odd game
       const totalCompletedGames = pg + og;
-      const isOddGameChange = totalCompletedGames % 2 !== 0;
+      const isOddGameChange = tiebreakProcedure !== 'manual' && totalCompletedGames % 2 !== 0;
 
       set({
         score: newScore,
@@ -827,8 +829,8 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       pressureContext: pressure,
       pressurePromptDismissed: false,
       courtSide: 'DEUCE',
-      showChangeEnds: isOddSetChange,
-      changeEndsReason: isOddSetChange
+      showChangeEnds: tiebreakProcedure !== 'manual' && isOddSetChange,
+      changeEndsReason: (tiebreakProcedure !== 'manual' && isOddSetChange)
         ? `End of set (${previousSetCompletedGames} games, odd) — switch sides`
         : undefined,
       undoStack: newUndoStack,
