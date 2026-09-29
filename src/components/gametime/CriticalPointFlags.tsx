@@ -3,6 +3,7 @@
 import { useMatchStore } from "@/stores/matchStore";
 import type { CriticalPointFlagType } from "@/models/types";
 import { Flag, AlertTriangle, Star, Eye } from "lucide-react";
+import { triggerHaptic } from "@/lib/haptics";
 
 const FLAG_OPTIONS: {
   type: CriticalPointFlagType;
@@ -51,7 +52,7 @@ export function CriticalPointFlags() {
           return (
             <button
               key={opt.type}
-              onClick={() => toggleFlag(opt.type)}
+              onClick={() => { triggerHaptic(); toggleFlag(opt.type); }}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all duration-200 ${
                 isActive ? opt.activeClasses : opt.inactiveClasses
               }`}

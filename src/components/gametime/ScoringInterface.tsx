@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMatchStore } from "@/stores/matchStore";
 import { PointClassification } from "@/models/types";
-import { Undo2, CheckCircle2, ArrowRight, Check, X, RotateCcw } from "lucide-react";
+import { Undo2, CheckCircle2, ArrowRight, Check, X, RotateCcw, Trophy, Save } from "lucide-react";
 import { CriticalPointFlags } from "./CriticalPointFlags";
 import { PressurePrompt } from "./PressurePrompt";
 import { PointNoteInput, NotesPanel } from "./NotesPanel";
@@ -11,6 +11,7 @@ import { SyncIndicator } from "./SyncIndicator";
 import { FlaggedPointsSummary } from "./FlaggedPointsSummary";
 import { NotesLog } from "./NotesLog";
 import { FinishMatchModal } from "./FinishMatchModal";
+import { triggerHaptic } from "@/lib/haptics";
 
 /* ---------- Unified classification options (same for both players) ---------- */
 
@@ -190,6 +191,80 @@ function NoAdIndicator() {
   return null;
 }
 
+/* ---------- Match Completion Modal ---------- */
+
+function MatchCompletionModal({
+  isOpen,
+  onClose,
+  onSave,
+  playerName,
+  opponentName,
+  playerSets,
+  opponentSets,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  onSave: () => void;
+  playerName: string;
+  opponentName: string;
+  playerSets: number;
+  opponentSets: number;
+}) {
+  if (!isOpen) return null;
+
+  const winner = playerSets > opponentSets ? playerName : opponentName;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl shadow-black/50 animate-in zoom-in-95 fade-in slide-in-from-bottom-4 duration-300 overflow-hidden">
+        {/* Decorative top gradient bar */}
+        <div className="h-1 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500" />
+
+        <div className="p-6 text-center">
+          {/* Trophy icon */}
+          <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center mb-5 shadow-lg shadow-amber-500/30">
+            <Trophy size={28} className="text-white" />
+          </div>
+
+          <h2 className="text-xl font-bold text-white mb-1">Match Complete</h2>
+          <p className="text-slate-400 text-sm mb-6">
+            <span className="text-white font-semibold">{winner}</span> wins the match{" "}
+            <span className="text-emerald-400 font-bold">{playerSets} – {opponentSets}</span>
+          </p>
+
+          {/* Saved confirmation */}
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold mb-6">
+            <Check size={13} className="shrink-0" />
+            <span>All match data has been saved</span>
+          </div>
+
+          {/* Actions */}
+          <div className="space-y-3">
+            <button
+              onClick={() => { triggerHaptic(60); onSave(); }}
+              className="w-full flex items-center justify-center gap-2.5 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-base shadow-lg shadow-emerald-600/30 active:scale-95 transition-all"
+            >
+              <Save size={18} />
+              Save & View Recap
+            </button>
+
+            <button
+              onClick={() => { triggerHaptic(); onClose(); }}
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 text-sm font-medium border border-slate-700 hover:border-slate-600 hover:text-white transition-all"
+            >
+              <Undo2 size={14} />
+              Return to Match
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------- Main Scoring Interface ---------- */
 
 export function ScoringInterface() {
@@ -203,15 +278,30 @@ export function ScoringInterface() {
   const resetMatch = useMatchStore((s) => s.resetMatch);
 
   const [isFinishModalOpen, setIsFinishModalOpen] = useState(false);
+  const [showCompletionModal, setShowCompletionModal] = useState(false);
 
   const playerLabel = setup?.playerName || "Player";
   const opponentLabel = setup?.opponentName || "Opponent";
 
   /* ---- Match finished ---- */
   if (phase === "FINISHED") {
-    const winner = score.playerSets > score.opponentSets ? playerLabel : opponentLabel;
     return (
       <div className="max-w-lg mx-auto p-6 md:p-10 text-center animate-in fade-in">
+        {/* Match Completion Modal */}
+        <MatchCompletionModal
+          isOpen={showCompletionModal}
+          onClose={() => setShowCompletionModal(false)}
+          onSave={() => {
+            setShowCompletionModal(false);
+            resetMatch();
+            // Future: navigate to /recap/:matchId
+          }}
+          playerName={playerLabel}
+          opponentName={opponentLabel}
+          playerSets={score.playerSets}
+          opponentSets={score.opponentSets}
+        />
+
         <div className="text-6xl mb-4">🏆</div>
         
         {/* Saved confirmation badge */}
@@ -222,7 +312,9 @@ export function ScoringInterface() {
 
         <h1 className="text-3xl font-bold mb-2">Match Complete</h1>
         <p className="text-slate-400 mb-8">
-          <span className="text-white font-semibold">{winner}</span> wins!{" "}
+          <span className="text-white font-semibold">
+            {score.playerSets > score.opponentSets ? playerLabel : opponentLabel}
+          </span> wins!{" "}
           {score.playerSets} – {score.opponentSets}
         </p>
         <ScoreDisplay />
@@ -233,19 +325,20 @@ export function ScoringInterface() {
         {/* Dedicated Notes Log (Match Notes & Point Notes) */}
         <NotesLog matchId={matchId} />
 
-        {/* Primary Actions: Continue & New Match */}
+        {/* Primary Actions */}
         <div className="mt-8 flex flex-col gap-3 max-w-xs mx-auto">
+          {/* Full-width Finish Match & Save — opens the completion modal */}
           <button
-            onClick={() => resetMatch()}
-            className="w-full flex items-center justify-center gap-2 py-3.5 px-6 rounded-xl bg-blue-600 text-white font-bold text-base hover:bg-blue-500 shadow-lg shadow-blue-600/25 active:scale-95 transition-all"
+            onClick={() => { triggerHaptic(60); setShowCompletionModal(true); }}
+            className="w-full flex items-center justify-center gap-2.5 py-4 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-base shadow-xl shadow-emerald-600/30 active:scale-95 transition-all"
           >
-            <span>Continue</span>
-            <ArrowRight size={18} />
+            <CheckCircle2 size={20} />
+            Finish Match & Save
           </button>
 
           {canUndo && (
             <button
-              onClick={undoLastPoint}
+              onClick={() => { triggerHaptic(); undoLastPoint(); }}
               className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-medium hover:bg-slate-700 hover:text-white transition-all border border-slate-700"
             >
               <Undo2 size={14} />
@@ -287,7 +380,7 @@ export function ScoringInterface() {
         <div className="flex items-center gap-3">
           <TiebreakBadge />
           <button
-            onClick={() => setIsFinishModalOpen(true)}
+            onClick={() => { triggerHaptic(); setIsFinishModalOpen(true); }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-semibold transition-all"
             title="Finish match options"
           >
@@ -321,13 +414,13 @@ export function ScoringInterface() {
             <p className="text-sm text-slate-400 font-medium mb-4 text-center">Who won the point?</p>
             <div className="grid grid-cols-2 gap-4">
               <button
-                onClick={() => selectPointWinner("PLAYER")}
+                onClick={() => { triggerHaptic(); selectPointWinner("PLAYER"); }}
                 className="py-6 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white text-lg font-bold shadow-lg shadow-blue-600/20 active:scale-95 transition-all"
               >
                 {playerLabel}
               </button>
               <button
-                onClick={() => selectPointWinner("OPPONENT")}
+                onClick={() => { triggerHaptic(); selectPointWinner("OPPONENT"); }}
                 className="py-6 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white text-lg font-bold shadow-lg shadow-indigo-600/20 active:scale-95 transition-all"
               >
                 {opponentLabel}
@@ -338,7 +431,7 @@ export function ScoringInterface() {
             <div className="mt-4">
               {!canUndo ? (
                 <button
-                  onClick={() => setIsFinishModalOpen(true)}
+                  onClick={() => { triggerHaptic(); setIsFinishModalOpen(true); }}
                   className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 text-sm font-semibold transition-all shadow-md active:scale-95"
                 >
                   <CheckCircle2 size={15} />
@@ -347,14 +440,14 @@ export function ScoringInterface() {
               ) : (
                 <div className="grid grid-cols-2 gap-3">
                   <button
-                    onClick={undoLastPoint}
+                    onClick={() => { triggerHaptic(); undoLastPoint(); }}
                     className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800/60 text-slate-400 text-sm font-medium hover:bg-slate-800 hover:text-white transition-all border border-slate-700/50"
                   >
                     <Undo2 size={14} />
                     Undo Last Point
                   </button>
                   <button
-                    onClick={() => setIsFinishModalOpen(true)}
+                    onClick={() => { triggerHaptic(); setIsFinishModalOpen(true); }}
                     className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 text-sm font-semibold transition-all"
                   >
                     <CheckCircle2 size={15} />
@@ -376,7 +469,7 @@ export function ScoringInterface() {
                 </span>{" "}
                 won — How did it end?
               </p>
-              <button onClick={cancelPointDetail} className="text-slate-500 hover:text-white transition-colors p-1">
+              <button onClick={() => { triggerHaptic(); cancelPointDetail(); }} className="text-slate-500 hover:text-white transition-colors p-1">
                 <Undo2 size={18} />
               </button>
             </div>
@@ -393,7 +486,7 @@ export function ScoringInterface() {
               ).map((btn) => (
                 <button
                   key={btn.value}
-                  onClick={() => selectClassification(btn.value)}
+                  onClick={() => { triggerHaptic(); selectClassification(btn.value); }}
                   className={`py-4 rounded-xl ${btn.color} ${btn.hoverColor} text-white font-semibold text-base shadow-md active:scale-95 transition-all`}
                 >
                   {btn.label}
@@ -410,7 +503,7 @@ export function ScoringInterface() {
               <p className="text-sm text-slate-400 font-medium">
                 What type of winner?
               </p>
-              <button onClick={cancelPointDetail} className="text-slate-500 hover:text-white transition-colors p-1">
+              <button onClick={() => { triggerHaptic(); cancelPointDetail(); }} className="text-slate-500 hover:text-white transition-colors p-1">
                 <Undo2 size={18} />
               </button>
             </div>
@@ -419,7 +512,7 @@ export function ScoringInterface() {
               {SHOT_TYPES.map((btn) => (
                 <button
                   key={btn.value}
-                  onClick={() => confirmShotType(btn.value)}
+                  onClick={() => { triggerHaptic(); confirmShotType(btn.value); }}
                   className={`py-4 rounded-xl ${btn.color} ${btn.hoverColor} text-white font-semibold text-sm shadow-md active:scale-95 transition-all`}
                 >
                   {btn.label}
