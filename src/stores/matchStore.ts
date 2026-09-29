@@ -141,7 +141,12 @@ interface MatchState {
   saveMatchNote: (text: string) => Promise<void>;
   refreshSyncStatus: () => Promise<void>;
   setOnlineStatus: (online: boolean) => void;
+
+  // Session recovery & DB hydration
+  isRecovering: boolean;
+  recoverActiveMatch: () => Promise<boolean>;
 }
+
 
 /* ------------------------------------------------------------------ */
 /*  ID helper                                                         */
@@ -356,6 +361,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
   isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
   unsyncedCount: 0,
   isSyncing: false,
+  isRecovering: false,
 
   /* ---- Lifecycle ---- */
 
@@ -993,6 +999,245 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     } finally {
       set({ isSyncing: false });
       await get().refreshSyncStatus();
+    }
+  },
+
+  /* ---- Session Recovery & Database Hydration ---- */
+
+  recoverActiveMatch: async () => {
+    // If we are already in an active session in memory, don't overwrite
+    const current = get();
+    if (current.phase !== 'IDLE' && current.matchId) {
+      return true;
+    }
+
+    set({ isRecovering: true });
+
+    try {
+      // Query Dexie database for the most recent match that has not been completed
+      let activeMatch = await db.matches.where('status').equals('IN_PROGRESS').last();
+      if (!activeMatch) {
+        activeMatch = await db.matches.where('status').equals('in-progress').last();
+      }
+      if (!activeMatch) {
+        const allMatches = await db.matches.toArray();
+        activeMatch = allMatches
+          .filter((m) => {
+            const st = (m.status || '').toLowerCase();
+            return st === 'in_progress' || st === 'in-progress';
+          })
+          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+      }
+
+      if (!activeMatch) {
+        set({ isRecovering: false });
+        return false;
+      }
+
+      // Reconstruct MatchSetup
+      const setup: MatchSetup = {
+        playerName: activeMatch.playerName,
+        opponentName: activeMatch.opponentName,
+        format: activeMatch.format,
+        surface: activeMatch.surface,
+        firstServer: activeMatch.firstServer,
+        tiebreakProcedure: activeMatch.tiebreakProcedure || 'standard',
+        thirdSetFormat: activeMatch.thirdSetFormat || 'full-set',
+        scoringFormat: activeMatch.scoringFormat || 'ad',
+      };
+
+      // Query all sets for this match
+      let matchSets = await db.sets
+        .where('matchId')
+        .equals(activeMatch.id)
+        .sortBy('setNumber');
+
+      if (matchSets.length === 0) {
+        const setId = uid();
+        const gameId = uid();
+        const newSet: DBSet = {
+          id: setId,
+          matchId: activeMatch.id,
+          setNumber: 1,
+          playerGames: 0,
+          opponentGames: 0,
+          tiebreak: false,
+        };
+        const newGame: DBGame = {
+          id: gameId,
+          setId,
+          matchId: activeMatch.id,
+          gameNumber: 1,
+          server: activeMatch.firstServer,
+          isTiebreak: false,
+        };
+        await db.sets.add(newSet);
+        await db.games.add(newGame);
+        matchSets = [newSet];
+      }
+
+      // Active set is the first set without a winner or the last set
+      const activeSet = matchSets.find((s) => !s.winner) || matchSets[matchSets.length - 1];
+
+      // Query games for the active set
+      let setGames = await db.games
+        .where('setId')
+        .equals(activeSet.id)
+        .sortBy('gameNumber');
+
+      if (setGames.length === 0) {
+        const gameId = uid();
+        const newGame: DBGame = {
+          id: gameId,
+          setId: activeSet.id,
+          matchId: activeMatch.id,
+          gameNumber: 1,
+          server: activeMatch.firstServer,
+          isTiebreak: activeSet.tiebreak,
+        };
+        await db.games.add(newGame);
+        setGames = [newGame];
+      }
+
+      const activeGame = setGames.find((g) => !g.winner) || setGames[setGames.length - 1];
+
+      // Query points for the active game
+      const allMatchPoints = await db.points
+        .where('matchId')
+        .equals(activeMatch.id)
+        .sortBy('pointNumber');
+
+      const activeGamePoints = allMatchPoints.filter((p) => p.gameId === activeGame.id);
+
+      // Sets won
+      const playerSets = matchSets.filter((s) => s.winner === 'PLAYER').length;
+      const opponentSets = matchSets.filter((s) => s.winner === 'OPPONENT').length;
+
+      // Games in active set
+      const playerGames = activeSet.playerGames;
+      const opponentGames = activeSet.opponentGames;
+
+      // Tiebreak status
+      const isTiebreak = Boolean(activeGame.isTiebreak || activeSet.tiebreak);
+      const isMatchTiebreak =
+        setup.format === 'BEST_OF_3' &&
+        setup.thirdSetFormat === '10-point-match-tiebreak' &&
+        activeSet.setNumber === 3;
+
+      let playerPoints = 0;
+      let opponentPoints = 0;
+      let isDeuce = false;
+      let advantage: 'PLAYER' | 'OPPONENT' | undefined = undefined;
+      let currentServer = activeGame.server;
+      const tiebreakFirstServer = activeGame.server;
+
+      if (isTiebreak || isMatchTiebreak) {
+        playerPoints = activeGamePoints.filter((p) => p.winner === 'PLAYER').length;
+        opponentPoints = activeGamePoints.filter((p) => p.winner === 'OPPONENT').length;
+        const totalTBPoints = playerPoints + opponentPoints;
+        currentServer = tiebreakServerForPoint(totalTBPoints, activeGame.server);
+      } else {
+        // Replay points to restore standard score / deuce / advantage
+        for (const pt of activeGamePoints) {
+          if (pt.winner === 'PLAYER') {
+            if (setup.scoringFormat === 'no-ad') {
+              playerPoints = nextPointScore(playerPoints);
+            } else {
+              if (isDeuce) {
+                if (advantage === 'OPPONENT') {
+                  advantage = undefined;
+                } else {
+                  advantage = 'PLAYER';
+                  isDeuce = false;
+                }
+              } else if (advantage === 'OPPONENT') {
+                advantage = undefined;
+                isDeuce = true;
+              } else {
+                playerPoints = nextPointScore(playerPoints);
+                if (playerPoints >= 3 && opponentPoints >= 3 && playerPoints === opponentPoints) {
+                  isDeuce = true;
+                }
+              }
+            }
+          } else {
+            if (setup.scoringFormat === 'no-ad') {
+              opponentPoints = nextPointScore(opponentPoints);
+            } else {
+              if (isDeuce) {
+                if (advantage === 'PLAYER') {
+                  advantage = undefined;
+                } else {
+                  advantage = 'OPPONENT';
+                  isDeuce = false;
+                }
+              } else if (advantage === 'PLAYER') {
+                advantage = undefined;
+                isDeuce = true;
+              } else {
+                opponentPoints = nextPointScore(opponentPoints);
+                if (playerPoints >= 3 && opponentPoints >= 3 && playerPoints === opponentPoints) {
+                  isDeuce = true;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      const recoveredScore: LiveScore = {
+        playerPoints,
+        opponentPoints,
+        playerGames,
+        opponentGames,
+        playerSets,
+        opponentSets,
+        currentServer,
+        isTiebreak,
+        isMatchTiebreak,
+        isDeuce,
+        advantage,
+        tiebreakFirstServer,
+      };
+
+      const courtSide = (isTiebreak || isMatchTiebreak)
+        ? tiebreakCourtSide(playerPoints + opponentPoints)
+        : standardCourtSide(activeGamePoints.length);
+
+      const pressureContext = detectPressureContext(recoveredScore, setup.format);
+      const unsyncedCount = await db.matches.where('synced').equals(0).count();
+
+      const setsToWin = getSetsToWin(setup.format);
+      const isFinished = playerSets >= setsToWin || opponentSets >= setsToWin;
+
+      set({
+        phase: isFinished ? 'FINISHED' : 'PLAYING',
+        matchId: activeMatch.id,
+        setup,
+        score: recoveredScore,
+        pendingPointWinner: null,
+        pendingClassification: null,
+        currentSetId: activeSet.id,
+        currentGameId: activeGame.id,
+        pointsInGame: activeGamePoints.length,
+        setsPlayed: matchSets,
+        pendingPointNote: '',
+        pendingPointFlags: [],
+        pressureContext,
+        pressurePromptDismissed: false,
+        courtSide,
+        showChangeEnds: false,
+        undoStack: [],
+        canUndo: false,
+        unsyncedCount,
+        isRecovering: false,
+      });
+
+      return true;
+    } catch (err) {
+      console.error('Failed to recover active match:', err);
+      set({ isRecovering: false });
+      return false;
     }
   },
 

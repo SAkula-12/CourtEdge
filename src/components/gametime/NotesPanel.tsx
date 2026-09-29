@@ -13,76 +13,9 @@ import {
   Save,
 } from "lucide-react";
 
-/** Collapsible panel for point-level note + voice dictation */
-function PointNoteInput() {
-  const pendingNote = useMatchStore((s) => s.pendingPointNote);
-  const setPointNote = useMatchStore((s) => s.setPointNote);
-  const { transcript, isListening, isSupported, toggle, reset } =
-    useSpeechToText();
+// Re-export enhanced PointNoteInput with quick tags and unified voice/typing state
+export { PointNoteInput } from "./ScoringInterface";
 
-  const [textBeforeDictation, setTextBeforeDictation] = useState("");
-
-  useEffect(() => {
-    if (isListening) {
-      const base = textBeforeDictation;
-      const combined = base ? `${base} ${transcript}` : transcript;
-      setPointNote(combined.trim());
-    }
-  }, [transcript, isListening, textBeforeDictation, setPointNote]);
-
-  const handleToggle = () => {
-    if (isListening) {
-      reset();
-    } else {
-      setTextBeforeDictation(pendingNote);
-      toggle();
-    }
-  };
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (isListening) {
-      reset();
-    }
-    setPointNote(e.target.value);
-  };
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
-        <MessageSquare size={12} />
-        <span>Point Note</span>
-      </div>
-      <div className="relative">
-        <input
-          type="text"
-          value={pendingNote}
-          onChange={handleChange}
-          placeholder="Quick note about this point…"
-          className="w-full bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-2 pr-10 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
-        />
-        {isSupported && (
-          <button
-            onClick={handleToggle}
-            className={`absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md transition-all ${
-              isListening
-                ? "text-red-400 bg-red-500/10 animate-pulse"
-                : "text-slate-500 hover:text-blue-400 hover:bg-blue-500/10"
-            }`}
-            title={isListening ? "Stop dictation" : "Start voice dictation"}
-          >
-            {isListening ? <MicOff size={15} /> : <Mic size={15} />}
-          </button>
-        )}
-      </div>
-      {isListening && (
-        <p className="text-[10px] text-red-400 flex items-center gap-1 animate-pulse">
-          <span className="w-1.5 h-1.5 bg-red-400 rounded-full" />
-          Listening…
-        </p>
-      )}
-    </div>
-  );
-}
 
 /** Expandable panel for point, game-level and match-level notes */
 export function NotesPanel() {
@@ -130,11 +63,9 @@ export function NotesPanel() {
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    if (isListening) {
-      reset();
-    }
     setCurrentText(e.target.value);
   };
+
 
   const handleTabChange = (nextTab: "point" | "game" | "match") => {
     if (nextTab === activeTab) return;
@@ -281,5 +212,3 @@ export function NotesPanel() {
     </div>
   );
 }
-
-export { PointNoteInput };

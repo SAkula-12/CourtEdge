@@ -1,17 +1,279 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useMatchStore } from "@/stores/matchStore";
 import { PointClassification } from "@/models/types";
-import { Undo2, CheckCircle2, ArrowRight, Check, X, RotateCcw, Trophy, Save } from "lucide-react";
+import { Undo2, CheckCircle2, ArrowRight, Check, X, RotateCcw, Trophy, Save, Mic, MicOff, MessageSquare } from "lucide-react";
 import { CriticalPointFlags } from "./CriticalPointFlags";
 import { PressurePrompt } from "./PressurePrompt";
-import { PointNoteInput, NotesPanel } from "./NotesPanel";
+import { NotesPanel } from "./NotesPanel";
 import { SyncIndicator } from "./SyncIndicator";
 import { FlaggedPointsSummary } from "./FlaggedPointsSummary";
 import { NotesLog } from "./NotesLog";
 import { FinishMatchModal } from "./FinishMatchModal";
 import { triggerHaptic } from "@/lib/haptics";
+
+/* ---------- Quick Tags Array (Specification 1) ---------- */
+
+export const QUICK_TAGS = [
+  '#ForehandMiss',
+  '#DeepReturn',
+  '#DoubleFault',
+  '#NetApproach',
+  '#Winner',
+  '#UnforcedError',
+] as const;
+
+/* ---------- Voice-to-Text Tennis Vocabulary Helpers ---------- */
+
+const TENNIS_VOCAB: Record<string, string> = {
+  'juice': 'deuce',
+  'add out': 'ad-out',
+  'ad out': 'ad-out',
+  'add in': 'ad-in',
+  'ad in': 'ad-in',
+  'four hand': 'forehand',
+  'for hand': 'forehand',
+  'back hand': 'backhand',
+  'unforced error': 'unforced error',
+  'un forced error': 'unforced error',
+  'four hand slice': 'forehand slice',
+  'for hand slice': 'forehand slice',
+  'double fault': 'double fault',
+  'brick point': 'break point',
+  'set point': 'set point',
+  'match point': 'match point',
+  'ace': 'ace',
+  'let': 'let',
+  'net': 'net',
+  'love': 'love',
+};
+
+function processTennisVocab(text: string): string {
+  let processed = text;
+  for (const [wrong, right] of Object.entries(TENNIS_VOCAB)) {
+    const regex = new RegExp(`\\b${wrong}\\b`, 'gi');
+    processed = processed.replace(regex, right);
+  }
+  return processed;
+}
+
+/* ---------- Voice Notes Input & Tag Shortcuts Component ---------- */
+
+export function PointNoteInput() {
+  const pendingPointNote = useMatchStore((s) => s.pendingPointNote);
+  const setPointNote = useMatchStore((s) => s.setPointNote);
+
+  // Specification 2: State Unification — both SpeechRecognition transcript and mobile keyboard feed into noteText
+  const [noteText, setNoteText] = useState(pendingPointNote || "");
+  const [interimText, setInterimText] = useState("");
+  const [isListening, setIsListening] = useState(false);
+  const [isSupported, setIsSupported] = useState(false);
+
+  const recognitionRef = useRef<any>(null);
+  const isListeningRef = useRef(false);
+  const interimTextRef = useRef("");
+
+  // Sync internal state when external store changes (e.g., cleared after point confirmation)
+  useEffect(() => {
+    setNoteText(pendingPointNote || "");
+  }, [pendingPointNote]);
+
+  // Web Speech API initialization
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const win = window as any;
+    const SpeechRecognitionClass =
+      win.SpeechRecognition || win.webkitSpeechRecognition;
+
+    if (SpeechRecognitionClass) {
+      setIsSupported(true);
+      const rec = new SpeechRecognitionClass();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = "en-US";
+
+      rec.onresult = (event: any) => {
+        let finalChunk = "";
+        let interimChunk = "";
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            finalChunk += event.results[i][0].transcript + " ";
+          } else {
+            interimChunk += event.results[i][0].transcript;
+          }
+        }
+
+        interimTextRef.current = interimChunk;
+        setInterimText(interimChunk);
+
+        if (finalChunk.trim()) {
+          const processed = processTennisVocab(finalChunk.trim());
+          // State Unification: SpeechRecognition transcript output feeds directly into noteText
+          setNoteText((prev) => {
+            const next = prev ? `${prev} ${processed}` : processed;
+            setPointNote(next);
+            return next;
+          });
+        }
+      };
+
+      rec.onerror = (event: any) => {
+        console.warn("Speech recognition notice:", event);
+      };
+
+      rec.onend = () => {
+        if (isListeningRef.current) {
+          try {
+            rec.start();
+          } catch {
+            setIsListening(false);
+            isListeningRef.current = false;
+          }
+        } else {
+          setIsListening(false);
+        }
+      };
+
+      recognitionRef.current = rec;
+    }
+
+    return () => {
+      isListeningRef.current = false;
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch {}
+      }
+    };
+  }, [setPointNote]);
+
+  const toggleListening = () => {
+    triggerHaptic(40);
+    const rec = recognitionRef.current;
+    if (!rec) return;
+
+    if (isListening) {
+      isListeningRef.current = false;
+      if (interimTextRef.current.trim()) {
+        const processed = processTennisVocab(interimTextRef.current.trim());
+        setNoteText((prev) => {
+          const next = prev ? `${prev} ${processed}` : processed;
+          setPointNote(next);
+          return next;
+        });
+        setInterimText("");
+        interimTextRef.current = "";
+      }
+      try {
+        rec.stop();
+      } catch {}
+      setIsListening(false);
+    } else {
+      isListeningRef.current = true;
+      try {
+        rec.start();
+        setIsListening(true);
+      } catch (err) {
+        console.error("Failed to start speech recognition:", err);
+        setIsListening(false);
+        isListeningRef.current = false;
+      }
+    }
+  };
+
+  // Specification 1: Append tag text to note state with leading space if note is not empty
+  const handleTagClick = (tag: string) => {
+    triggerHaptic(40);
+    setNoteText((prev) => {
+      const next = prev ? `${prev} ${tag}` : tag;
+      setPointNote(next);
+      return next;
+    });
+  };
+
+  // Specification 2: Standard mobile keyboard onChange feeds into exact same state (noteText)
+  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    setNoteText(val);
+    setPointNote(val);
+  };
+
+  // Specification 2: Focus Protection — Tapping textarea explicitly does NOT stop/abort recognition
+  const handleFocus = () => {
+    // Microphone continues to listen in the background while typing
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-400">
+        <span className="flex items-center gap-1.5">
+          <MessageSquare size={13} className="text-blue-400" />
+          Point Note
+        </span>
+        {isListening && (
+          <span className="flex items-center gap-1.5 text-red-400 font-medium normal-case animate-pulse text-[11px]">
+            <span className="w-1.5 h-1.5 bg-red-400 rounded-full" />
+            Mic listening…
+          </span>
+        )}
+      </div>
+
+      {/* Specification 1: Horizontally scrolling row of touch-friendly pill buttons */}
+      <div className="flex overflow-x-auto whitespace-nowrap gap-2 pb-2 scrollbar-hide">
+        {QUICK_TAGS.map((tag) => (
+          <button
+            key={tag}
+            type="button"
+            onClick={() => handleTagClick(tag)}
+            className="px-3 py-1.5 rounded-full text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 hover:border-slate-600 transition-all shrink-0 active:scale-95 shadow-sm"
+          >
+            {tag}
+          </button>
+        ))}
+      </div>
+
+      {/* Specification 2: Unified Note Textarea with Focus Protection */}
+      <div className="relative">
+        <textarea
+          value={noteText}
+          onChange={handleTextChange}
+          onFocus={handleFocus}
+          placeholder="Add point note or tap quick tags above…"
+          rows={2}
+          className="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-3.5 py-2.5 pr-11 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all resize-none shadow-inner"
+        />
+
+        {isSupported && (
+          <button
+            type="button"
+            onClick={toggleListening}
+            className={`absolute right-2.5 top-2.5 p-1.5 rounded-lg transition-all ${
+              isListening
+                ? "text-red-400 bg-red-500/10 border border-red-500/30 animate-pulse shadow-sm shadow-red-500/20"
+                : "text-slate-400 hover:text-blue-400 hover:bg-slate-800"
+            }`}
+            title={isListening ? "Stop listening" : "Start voice dictation"}
+          >
+            {isListening ? <MicOff size={16} /> : <Mic size={16} />}
+          </button>
+        )}
+      </div>
+
+      {isListening && (
+        <div className="flex items-center justify-between text-[11px] text-slate-400">
+          <span className="flex items-center gap-1.5 text-red-400">
+            <span className="w-1.5 h-1.5 bg-red-400 rounded-full animate-ping" />
+            Listening… {interimText && <span className="text-slate-300 italic font-mono">"{interimText}"</span>}
+          </span>
+          <span className="text-[10px] text-slate-500">Tap mic to stop</span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ---------- Unified classification options (same for both players) ---------- */
 
@@ -21,6 +283,7 @@ const CLASSIFICATIONS = [
   { value: PointClassification.FORCED_ERROR,   label: "Forced Error",   color: "bg-amber-600",   hoverColor: "hover:bg-amber-500" },
   { value: PointClassification.UNFORCED_ERROR, label: "Unforced Error", color: "bg-red-600",     hoverColor: "hover:bg-red-500" },
 ];
+
 
 /* ---------- Shot types for the Winner follow-up ---------- */
 
