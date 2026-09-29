@@ -380,26 +380,26 @@ function ChangeEndsBanner() {
   );
 }
 
-/* ---------- Manual Switch Sides Button ("Other" changeover) ---------- */
+/* ---------- Manual Switch Server Button ---------- */
 
 function ManualSwitchButton() {
+  const switchServer = useMatchStore((s) => s.switchServer);
+  const score = useMatchStore((s) => s.score);
   const setup = useMatchStore((s) => s.setup);
-  const manualChangeEnds = useMatchStore((s) => s.manualChangeEnds);
-  const showChangeEnds = useMatchStore((s) => s.showChangeEnds);
 
-  // Only show when changeover procedure is 'other' and the automatic banner isn't already showing
-  if (setup?.tiebreakProcedure !== 'other' || showChangeEnds) return null;
+  const serverName = score.currentServer === "PLAYER"
+    ? (setup?.playerName || "You")
+    : (setup?.opponentName || "Opponent");
 
   return (
     <button
-      onClick={() => { triggerHaptic(); manualChangeEnds(); }}
-      className="mt-3 w-full flex items-center justify-center gap-2.5 py-3 rounded-xl bg-gradient-to-r from-orange-500/10 to-amber-500/10 border border-orange-500/30 hover:border-orange-500/60 hover:from-orange-500/20 hover:to-amber-500/20 active:scale-[0.98] transition-all"
+      onClick={() => { triggerHaptic(40); switchServer(); }}
+      className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-white text-xs font-semibold transition-all active:scale-[0.98] shadow-sm"
+      title="Manually switch who is serving"
     >
-      <ArrowLeftRight size={16} className="text-orange-400" />
-      <span className="text-sm font-semibold text-orange-300">Switch Sides</span>
-      {setup.customChangeoverDesc && (
-        <span className="text-[10px] text-orange-400/70 ml-1">({setup.customChangeoverDesc})</span>
-      )}
+      <ArrowLeftRight size={14} className="text-amber-400" />
+      <span>Switch Server</span>
+      <span className="text-slate-500 font-normal">({serverName} serving)</span>
     </button>
   );
 }

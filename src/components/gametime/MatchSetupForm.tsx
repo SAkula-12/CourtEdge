@@ -26,8 +26,6 @@ export function MatchSetupForm() {
   const [showCustomSurface, setShowCustomSurface] = useState(false);
   const [customSurface, setCustomSurface] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [showCustomChangeover, setShowCustomChangeover] = useState(false);
-  const [customChangeoverDesc, setCustomChangeoverDesc] = useState("");
 
   const canStart = form.playerName.trim() !== "" && form.opponentName.trim() !== "";
 
@@ -39,9 +37,6 @@ export function MatchSetupForm() {
     }
     if (showCustomSurface && customSurface.trim()) {
       finalForm.surface = customSurface.trim();
-    }
-    if (showCustomChangeover && customChangeoverDesc.trim()) {
-      finalForm.customChangeoverDesc = customChangeoverDesc.trim();
     }
     await confirmSetup(finalForm);
   };
@@ -254,19 +249,16 @@ export function MatchSetupForm() {
                   Changeover Procedure
                   <span className="ml-2 text-slate-600 normal-case font-normal">When to switch sides</span>
                 </label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   {([
                     { value: 'standard' as const, label: 'Standard', desc: 'End of every odd game (1st, 3rd, 5th, etc.)' },
                     { value: 'coman' as const, label: 'Coman', desc: 'After 1st, then every 4' },
                   ]).map((opt) => {
-                    const isActive = !showCustomChangeover && form.tiebreakProcedure === opt.value;
+                    const isActive = form.tiebreakProcedure === opt.value;
                     return (
                       <button
                         key={opt.value}
-                        onClick={() => {
-                          setShowCustomChangeover(false);
-                          setForm({ ...form, tiebreakProcedure: opt.value });
-                        }}
+                        onClick={() => setForm({ ...form, tiebreakProcedure: opt.value })}
                         className={`py-3 rounded-xl text-sm font-medium border transition-all ${
                           isActive
                             ? "bg-amber-600 border-amber-500 text-white shadow-lg shadow-amber-500/20"
@@ -278,31 +270,7 @@ export function MatchSetupForm() {
                       </button>
                     );
                   })}
-                  <button
-                    onClick={() => {
-                      setShowCustomChangeover(true);
-                      setForm({ ...form, tiebreakProcedure: 'other' });
-                    }}
-                    className={`py-3 rounded-xl text-sm font-medium border transition-all ${
-                      showCustomChangeover
-                        ? "bg-amber-600 border-amber-500 text-white shadow-lg shadow-amber-500/20"
-                        : "bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-500"
-                    }`}
-                  >
-                    <div className="font-semibold">Other</div>
-                    <div className={`text-[10px] mt-0.5 ${showCustomChangeover ? 'text-amber-200' : 'text-slate-600'}`}>Manual switch</div>
-                  </button>
                 </div>
-                {showCustomChangeover && (
-                  <input
-                    type="text"
-                    value={customChangeoverDesc}
-                    onChange={(e) => setCustomChangeoverDesc(e.target.value)}
-                    placeholder="e.g. Switch every 4 games"
-                    autoFocus
-                    className="mt-3 w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all text-sm"
-                  />
-                )}
               </div>
 
               {/* Third Set Format (only for Best of 3) */}

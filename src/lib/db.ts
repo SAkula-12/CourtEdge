@@ -13,8 +13,7 @@ export interface DBMatch {
   firstServer: 'PLAYER' | 'OPPONENT';
   synced: 0 | 1;          // 0 = pending, 1 = synced (indexable number)
   // Tournament-grade scoring settings (v3)
-  tiebreakProcedure?: 'standard' | 'coman' | 'other';
-  customChangeoverDesc?: string;
+  tiebreakProcedure?: 'standard' | 'coman';
   thirdSetFormat?: 'full-set' | '10-point-match-tiebreak';
   scoringFormat?: 'ad' | 'no-ad';
 }
