@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useMatchStore } from "@/stores/matchStore";
 import { PointClassification } from "@/models/types";
-import { Undo2, CheckCircle2, ArrowRight, Check, X, RotateCcw, Trophy, Save, Mic, MicOff, MessageSquare, PauseCircle, CloudRain, ChevronDown } from "lucide-react";
+import { Undo2, CheckCircle2, ArrowRight, Check, X, RotateCcw, Trophy, Save, Mic, MicOff, MessageSquare, PauseCircle, CloudRain, ChevronDown, ArrowLeftRight } from "lucide-react";
 import { CriticalPointFlags } from "./CriticalPointFlags";
 import { PressurePrompt } from "./PressurePrompt";
 import { NotesPanel } from "./NotesPanel";
@@ -380,6 +380,30 @@ function ChangeEndsBanner() {
   );
 }
 
+/* ---------- Manual Switch Sides Button ("Other" changeover) ---------- */
+
+function ManualSwitchButton() {
+  const setup = useMatchStore((s) => s.setup);
+  const manualChangeEnds = useMatchStore((s) => s.manualChangeEnds);
+  const showChangeEnds = useMatchStore((s) => s.showChangeEnds);
+
+  // Only show when changeover procedure is 'other' and the automatic banner isn't already showing
+  if (setup?.tiebreakProcedure !== 'other' || showChangeEnds) return null;
+
+  return (
+    <button
+      onClick={() => { triggerHaptic(); manualChangeEnds(); }}
+      className="mt-3 w-full flex items-center justify-center gap-2.5 py-3 rounded-xl bg-gradient-to-r from-orange-500/10 to-amber-500/10 border border-orange-500/30 hover:border-orange-500/60 hover:from-orange-500/20 hover:to-amber-500/20 active:scale-[0.98] transition-all"
+    >
+      <ArrowLeftRight size={16} className="text-orange-400" />
+      <span className="text-sm font-semibold text-orange-300">Switch Sides</span>
+      {setup.customChangeoverDesc && (
+        <span className="text-[10px] text-orange-400/70 ml-1">({setup.customChangeoverDesc})</span>
+      )}
+    </button>
+  );
+}
+
 
 /* ---------- Court Side Indicator ---------- */
 
@@ -750,6 +774,9 @@ export function ScoringInterface() {
 
       {/* Change ends banner */}
       <ChangeEndsBanner />
+
+      {/* Manual switch sides button ("Other" changeover procedure) */}
+      <ManualSwitchButton />
 
       {/* Pressure context prompt (Section 18.2) */}
       <div className="mt-4">

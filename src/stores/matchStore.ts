@@ -27,6 +27,7 @@ export interface MatchSetup {
   firstServer: 'PLAYER' | 'OPPONENT';
   // Tournament-grade settings
   tiebreakProcedure: TiebreakProcedure;
+  customChangeoverDesc?: string;
   thirdSetFormat: ThirdSetFormat;
   scoringFormat: ScoringFormat;
 }
@@ -137,6 +138,7 @@ interface MatchState {
   togglePointFlag: (flag: CriticalPointFlagType) => void;
   dismissPressurePrompt: () => void;
   dismissChangeEnds: () => void;
+  manualChangeEnds: () => void;
   undoLastPoint: () => Promise<void>;
   finishMatch: (reason?: 'COMPLETED' | 'PLAYER_FORFEIT' | 'OPPONENT_FORFEIT' | 'CANCEL') => Promise<void>;
   resetMatch: () => void;
@@ -394,6 +396,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       firstServer: setup.firstServer,
       synced: 0,
       tiebreakProcedure: setup.tiebreakProcedure,
+      customChangeoverDesc: setup.customChangeoverDesc,
       thirdSetFormat: setup.thirdSetFormat,
       scoringFormat: setup.scoringFormat,
     };
@@ -545,12 +548,14 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       // Preserve tiebreakFirstServer through the tiebreak
       newScore.tiebreakFirstServer = firstServer;
 
-      // Change of ends in tiebreak
-      triggerChangeEnds = shouldChangeEnds(totalTBPointsAfter, tiebreakProcedure);
-      if (triggerChangeEnds) {
-        changeEndsMsg = tiebreakProcedure === 'coman'
-          ? `Coman changeover (point ${totalTBPointsAfter}) — switch sides`
-          : `Tiebreak changeover (${totalTBPointsAfter} points) — switch sides`;
+      // Change of ends in tiebreak (skip for 'other' — user triggers manually)
+      if (tiebreakProcedure !== 'other') {
+        triggerChangeEnds = shouldChangeEnds(totalTBPointsAfter, tiebreakProcedure);
+        if (triggerChangeEnds) {
+          changeEndsMsg = tiebreakProcedure === 'coman'
+            ? `Coman changeover (point ${totalTBPointsAfter}) — switch sides`
+            : `Tiebreak changeover (${totalTBPointsAfter} points) — switch sides`;
+        }
       }
     } else {
       // === Standard game scoring ===
@@ -693,8 +698,9 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       const newUndoStack = [...state.undoStack, undoSnapshot];
 
       // Standard changeover: players change ends at the end of the 1st, 3rd, 5th, and every subsequent odd game
+      // Skip automatic changeover when procedure is 'other' — user triggers manually
       const totalCompletedGames = pg + og;
-      const isOddGameChange = totalCompletedGames % 2 !== 0;
+      const isOddGameChange = tiebreakProcedure !== 'other' && totalCompletedGames % 2 !== 0;
 
       set({
         score: newScore,
@@ -825,8 +831,8 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       pressureContext: pressure,
       pressurePromptDismissed: false,
       courtSide: 'DEUCE',
-      showChangeEnds: isOddSetChange,
-      changeEndsReason: isOddSetChange
+      showChangeEnds: tiebreakProcedure !== 'other' && isOddSetChange,
+      changeEndsReason: (tiebreakProcedure !== 'other' && isOddSetChange)
         ? `End of set (${previousSetCompletedGames} games, odd) — switch sides`
         : undefined,
       undoStack: newUndoStack,
@@ -850,6 +856,13 @@ export const useMatchStore = create<MatchState>((set, get) => ({
   dismissPressurePrompt: () => set({ pressurePromptDismissed: true }),
 
   dismissChangeEnds: () => set({ showChangeEnds: false, changeEndsReason: undefined }),
+
+  manualChangeEnds: () => set({
+    showChangeEnds: true,
+    changeEndsReason: get().setup?.customChangeoverDesc
+      ? `${get().setup!.customChangeoverDesc} — switch sides`
+      : 'Manual changeover — switch sides',
+  }),
 
   /* ---- Undo (Section 17) ---- */
 
@@ -1110,6 +1123,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
         surface: activeMatch.surface,
         firstServer: activeMatch.firstServer,
         tiebreakProcedure: activeMatch.tiebreakProcedure || 'standard',
+        customChangeoverDesc: activeMatch.customChangeoverDesc,
         thirdSetFormat: activeMatch.thirdSetFormat || 'full-set',
         scoringFormat: activeMatch.scoringFormat || 'ad',
       };

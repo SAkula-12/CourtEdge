@@ -2,8 +2,8 @@
 /*  Tournament-grade scoring configuration types                       */
 /* ------------------------------------------------------------------ */
 
-/** Standard = change ends every 6 pts; Coman = change after 1st then every 4 */
-export type TiebreakProcedure = 'standard' | 'coman';
+/** Standard = change ends every 6 pts; Coman = change after 1st then every 4; Other = manual */
+export type TiebreakProcedure = 'standard' | 'coman' | 'other';
 
 /** full-set = play a normal third set; 10-point-match-tiebreak = super tiebreak */
 export type ThirdSetFormat = 'full-set' | '10-point-match-tiebreak';
