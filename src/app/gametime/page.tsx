@@ -64,8 +64,12 @@ export default function GametimePage() {
     );
   }
 
-  // Idle — prompt to start a match
+  // Idle — prompt to start a match or show setup
   if (phase === "IDLE") {
+    if (suspendedMatches.length === 0) {
+      return <MatchSetupForm />;
+    }
+
     return (
       <div className="flex flex-col items-center justify-center min-h-[80vh] p-6 text-center animate-in fade-in">
         <div className="bg-slate-900 border border-slate-800 rounded-3xl p-10 max-w-md w-full">
