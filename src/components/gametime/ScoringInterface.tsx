@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMatchStore } from "@/stores/matchStore";
 import { PointClassification } from "@/models/types";
-import { Undo2, CheckCircle2, ArrowRight, Check } from "lucide-react";
+import { Undo2, CheckCircle2, ArrowRight, Check, X, RotateCcw } from "lucide-react";
 import { CriticalPointFlags } from "./CriticalPointFlags";
 import { PressurePrompt } from "./PressurePrompt";
 import { PointNoteInput, NotesPanel } from "./NotesPanel";
@@ -82,6 +82,112 @@ function ScoreDisplay() {
       </div>
     </div>
   );
+}
+
+/* ---------- Change Ends Banner ---------- */
+
+function ChangeEndsBanner() {
+  const showChangeEnds = useMatchStore((s) => s.showChangeEnds);
+  const dismissChangeEnds = useMatchStore((s) => s.dismissChangeEnds);
+
+  if (!showChangeEnds) return null;
+
+  return (
+    <div className="relative mt-3 flex items-center gap-3 p-3.5 rounded-xl bg-gradient-to-r from-orange-500/20 to-amber-500/20 border border-orange-500/40 animate-in fade-in slide-in-from-top-2 duration-300">
+      <div className="shrink-0 flex items-center justify-center w-10 h-10 rounded-full bg-orange-500/30">
+        <RotateCcw size={18} className="text-orange-300 animate-spin" style={{ animationDuration: '3s' }} />
+      </div>
+      <div className="flex-1">
+        <div className="text-sm font-bold text-orange-300 uppercase tracking-wider">Change Ends</div>
+        <div className="text-xs text-orange-400/70 mt-0.5">Players switch sides of the court</div>
+      </div>
+      <button
+        onClick={dismissChangeEnds}
+        className="shrink-0 p-1.5 rounded-lg hover:bg-orange-500/20 text-orange-400 transition-colors"
+        title="Dismiss"
+      >
+        <X size={16} />
+      </button>
+    </div>
+  );
+}
+
+/* ---------- Court Side Indicator ---------- */
+
+function CourtSideIndicator() {
+  const courtSide = useMatchStore((s) => s.courtSide);
+  const score = useMatchStore((s) => s.score);
+  const setup = useMatchStore((s) => s.setup);
+
+  // Only show during tiebreaks or when it might be useful
+  if (!score.isTiebreak && !score.isMatchTiebreak) return null;
+
+  const serverName = score.currentServer === 'PLAYER'
+    ? (setup?.playerName || 'Player')
+    : (setup?.opponentName || 'Opponent');
+
+  return (
+    <div className="flex items-center gap-2 text-xs mt-2">
+      <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border ${
+        courtSide === 'DEUCE'
+          ? 'bg-sky-500/10 border-sky-500/30 text-sky-400'
+          : 'bg-purple-500/10 border-purple-500/30 text-purple-400'
+      }`}>
+        <span className="font-semibold uppercase tracking-wider">{courtSide}</span>
+        <span className="opacity-60">Court</span>
+      </div>
+      <span className="text-slate-600">•</span>
+      <span className="text-slate-500">
+        {serverName} serving
+      </span>
+    </div>
+  );
+}
+
+/* ---------- Tiebreak / Match Tiebreak Badge ---------- */
+
+function TiebreakBadge() {
+  const score = useMatchStore((s) => s.score);
+
+  if (score.isMatchTiebreak) {
+    return (
+      <span className="text-xs font-bold uppercase tracking-wider text-rose-400 bg-rose-400/10 px-3 py-1 rounded-full border border-rose-400/20 animate-pulse">
+        Match Tiebreak — First to 10
+      </span>
+    );
+  }
+
+  if (score.isTiebreak) {
+    return (
+      <span className="text-xs font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 px-3 py-1 rounded-full">
+        Tiebreak
+      </span>
+    );
+  }
+
+  return null;
+}
+
+/* ---------- No-Ad Deuce Indicator ---------- */
+
+function NoAdIndicator() {
+  const score = useMatchStore((s) => s.score);
+  const setup = useMatchStore((s) => s.setup);
+
+  if (setup?.scoringFormat !== 'no-ad') return null;
+  if (score.isTiebreak || score.isMatchTiebreak) return null;
+
+  // Only show when at deuce (both >= 3 and equal)
+  if (score.playerPoints >= 3 && score.opponentPoints >= 3 && score.playerPoints === score.opponentPoints) {
+    return (
+      <div className="mt-2 flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20">
+        <span className="text-xs font-bold text-red-400 uppercase tracking-wider">Deciding Point</span>
+        <span className="text-xs text-red-400/60">• No-Ad</span>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 /* ---------- Main Scoring Interface ---------- */
@@ -179,11 +285,7 @@ export function ScoringInterface() {
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl md:text-2xl font-bold">Live Scoring</h1>
         <div className="flex items-center gap-3">
-          {score.isTiebreak && (
-            <span className="text-xs font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 px-3 py-1 rounded-full">
-              Tiebreak
-            </span>
-          )}
+          <TiebreakBadge />
           <button
             onClick={() => setIsFinishModalOpen(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-semibold transition-all"
@@ -197,6 +299,15 @@ export function ScoringInterface() {
       </div>
 
       <ScoreDisplay />
+
+      {/* Court side indicator (tiebreaks only) */}
+      <CourtSideIndicator />
+
+      {/* No-Ad deciding point indicator */}
+      <NoAdIndicator />
+
+      {/* Change ends banner */}
+      <ChangeEndsBanner />
 
       {/* Pressure context prompt (Section 18.2) */}
       <div className="mt-4">

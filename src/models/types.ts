@@ -1,3 +1,20 @@
+/* ------------------------------------------------------------------ */
+/*  Tournament-grade scoring configuration types                       */
+/* ------------------------------------------------------------------ */
+
+/** Standard = change ends every 6 pts; Coman = change after 1st then every 4 */
+export type TiebreakProcedure = 'standard' | 'coman';
+
+/** full-set = play a normal third set; 10-point-match-tiebreak = super tiebreak */
+export type ThirdSetFormat = 'full-set' | '10-point-match-tiebreak';
+
+/** ad = advantage scoring; no-ad = sudden death at 40-40 */
+export type ScoringFormat = 'ad' | 'no-ad';
+
+/* ------------------------------------------------------------------ */
+/*  Core domain types                                                  */
+/* ------------------------------------------------------------------ */
+
 export interface User {
   id: string;
   email: string;

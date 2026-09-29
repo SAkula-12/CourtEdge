@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { db } from '@/lib/db';
 import type { DBMatch, DBSet, DBGame, DBPoint, DBNote } from '@/lib/db';
 import { PointClassification } from '@/models/types';
-import type { CriticalPointFlagType } from '@/models/types';
+import type { CriticalPointFlagType, TiebreakProcedure, ThirdSetFormat, ScoringFormat } from '@/models/types';
 
 /* ------------------------------------------------------------------ */
 /*  Tennis scoring helpers                                            */
@@ -25,7 +25,14 @@ export interface MatchSetup {
   format: 'BEST_OF_1' | 'BEST_OF_3' | 'BEST_OF_5' | string;
   surface: string;
   firstServer: 'PLAYER' | 'OPPONENT';
+  // Tournament-grade settings
+  tiebreakProcedure: TiebreakProcedure;
+  thirdSetFormat: ThirdSetFormat;
+  scoringFormat: ScoringFormat;
 }
+
+/** Which side of the court the server is on */
+export type CourtSide = 'DEUCE' | 'AD';
 
 interface LiveScore {
   playerPoints: number;  // 0-3 index into POINT_LABELS, or raw count in tiebreak
@@ -36,8 +43,11 @@ interface LiveScore {
   opponentSets: number;
   currentServer: 'PLAYER' | 'OPPONENT';
   isTiebreak: boolean;
+  isMatchTiebreak: boolean;   // 10-point match tiebreak (3rd set format)
   isDeuce: boolean;
   advantage?: 'PLAYER' | 'OPPONENT';
+  /** Who served the very first point of this tiebreak (for next-set transition) */
+  tiebreakFirstServer?: 'PLAYER' | 'OPPONENT';
 }
 
 /** System-detected pressure context (Section 18.2) */
@@ -56,6 +66,8 @@ interface UndoSnapshot {
   currentGameId: string;
   setsPlayed: DBSet[];
   phase: MatchState['phase'];
+  /** Whether a change-ends banner was showing */
+  showChangeEnds: boolean;
   /** DB entities to delete on undo */
   pointId: string;
   /** If the point ended a game, we created a new game — need to delete it too */
@@ -93,6 +105,10 @@ interface MatchState {
   pressureContext: PressureContext;
   pressurePromptDismissed: boolean;
 
+  // Tiebreak UI state
+  courtSide: CourtSide;
+  showChangeEnds: boolean;
+
   // Undo stack (Section 17)
   undoStack: UndoSnapshot[];
   canUndo: boolean;
@@ -117,6 +133,7 @@ interface MatchState {
   setPointNote: (note: string) => void;
   togglePointFlag: (flag: CriticalPointFlagType) => void;
   dismissPressurePrompt: () => void;
+  dismissChangeEnds: () => void;
   undoLastPoint: () => Promise<void>;
   finishMatch: (reason?: 'COMPLETED' | 'PLAYER_FORFEIT' | 'OPPONENT_FORFEIT' | 'CANCEL') => Promise<void>;
   resetMatch: () => void;
@@ -155,6 +172,78 @@ function getSetsToWin(format: string): number {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Tiebreak change-of-ends detection                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Determine if players should change ends based on the total points
+ * played so far in the tiebreak (BEFORE adding the current point).
+ * We check if the NEW total (after this point) hits a threshold.
+ *
+ * Standard: change at 6, 12, 18, ...
+ * Coman: change at 1, 5, 9, 13, 17, ...
+ */
+function shouldChangeEnds(
+  totalPointsAfter: number,
+  procedure: TiebreakProcedure,
+): boolean {
+  if (procedure === 'standard') {
+    return totalPointsAfter > 0 && totalPointsAfter % 6 === 0;
+  }
+  // Coman: after 1st point, then every 4 points (1, 5, 9, 13, ...)
+  if (totalPointsAfter === 1) return true;
+  if (totalPointsAfter > 1 && (totalPointsAfter - 1) % 4 === 0) return true;
+  return false;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tiebreak service rotation                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Compute who should serve a given tiebreak point (0-indexed total).
+ *   Point 0: firstServer serves 1 point
+ *   Points 1-2: other serves 2 points
+ *   Points 3-4: firstServer serves 2 points
+ *   etc. → pattern repeats every 4 after the first
+ */
+function tiebreakServerForPoint(
+  totalPoints: number,
+  firstServer: 'PLAYER' | 'OPPONENT',
+): 'PLAYER' | 'OPPONENT' {
+  const other = firstServer === 'PLAYER' ? 'OPPONENT' : 'PLAYER';
+  if (totalPoints === 0) return firstServer;
+  // After point 0, group into pairs starting at index 1
+  const groupIndex = Math.floor((totalPoints - 1) / 2);
+  // Even groups → other, odd groups → firstServer
+  return groupIndex % 2 === 0 ? other : firstServer;
+}
+
+/**
+ * Determine the court side for the current point in a tiebreak.
+ * Point 0 → Deuce; then alternate Ad, Deuce, Ad, Deuce, ...
+ * But actually each server change resets to a specific pattern:
+ *   Point 0: Deuce (server A, 1 point)
+ *   Point 1: Ad    (server B, point 1 of 2)
+ *   Point 2: Deuce (server B, point 2 of 2)
+ *   Point 3: Ad    (server A, point 1 of 2)
+ *   Point 4: Deuce (server A, point 2 of 2)
+ *   ...
+ * The pattern is simply: even total = Deuce, odd total = Ad
+ */
+function tiebreakCourtSide(totalPoints: number): CourtSide {
+  return totalPoints % 2 === 0 ? 'DEUCE' : 'AD';
+}
+
+/**
+ * For standard (non-tiebreak) games, court side based on total points.
+ * First point: Deuce (right), then alternates.
+ */
+function standardCourtSide(totalPoints: number): CourtSide {
+  return totalPoints % 2 === 0 ? 'DEUCE' : 'AD';
+}
+
+/* ------------------------------------------------------------------ */
 /*  Pressure context detection (Section 18.2)                         */
 /* ------------------------------------------------------------------ */
 
@@ -168,8 +257,7 @@ function detectPressureContext(
   const isReceiverOpponent = score.currentServer === 'PLAYER';
 
   // In a standard game (non-tiebreak), check for break/set/match points.
-  // A break point exists when the receiver could win the game on this point.
-  if (!score.isTiebreak) {
+  if (!score.isTiebreak && !score.isMatchTiebreak) {
     const pp = score.playerPoints;
     const op = score.opponentPoints;
 
@@ -183,7 +271,7 @@ function detectPressureContext(
       (op >= 3 && op > pp) ||
       op >= 4;
 
-    // Match point: either side is one set from winning AND can win this game → could win the set → could win the match
+    // Set point checks
     const playerOnSetPoint = (score.playerGames >= 5 && score.playerGames > score.opponentGames) && playerCanWinGame;
     const opponentOnSetPoint = (score.opponentGames >= 5 && score.opponentGames > score.playerGames) && opponentCanWinGame;
 
@@ -197,18 +285,23 @@ function detectPressureContext(
     if (isReceiverPlayer && playerCanWinGame) return 'BREAK_POINT';
     if (isReceiverOpponent && opponentCanWinGame) return 'BREAK_POINT_AGAINST';
   } else {
-    // Tiebreak: set point when one side reaches 6+ and leads by 1+
+    // Tiebreak (set or match): check for set/match points
     const pp = score.playerPoints;
     const op = score.opponentPoints;
 
-    const playerOnTBSetPoint = pp >= 6 && pp > op;
-    const opponentOnTBSetPoint = op >= 6 && op > pp;
+    const tbTarget = score.isMatchTiebreak ? 10 : 7;
+    const playerOnTBPoint = pp >= (tbTarget - 1) && pp > op;
+    const opponentOnTBPoint = op >= (tbTarget - 1) && op > pp;
 
-    const playerOnMatchPoint = playerOnTBSetPoint && (score.playerSets + 1 >= setsToWin);
-    const opponentOnMatchPoint = opponentOnTBSetPoint && (score.opponentSets + 1 >= setsToWin);
-
-    if (playerOnMatchPoint || opponentOnMatchPoint) return 'MATCH_POINT';
-    if (playerOnTBSetPoint || opponentOnTBSetPoint) return 'SET_POINT';
+    // A match tiebreak winning IS match point
+    if (score.isMatchTiebreak) {
+      if (playerOnTBPoint || opponentOnTBPoint) return 'MATCH_POINT';
+    } else {
+      const playerOnMatchPoint = playerOnTBPoint && (score.playerSets + 1 >= setsToWin);
+      const opponentOnMatchPoint = opponentOnTBPoint && (score.opponentSets + 1 >= setsToWin);
+      if (playerOnMatchPoint || opponentOnMatchPoint) return 'MATCH_POINT';
+      if (playerOnTBPoint || opponentOnTBPoint) return 'SET_POINT';
+    }
   }
 
   return null;
@@ -227,6 +320,7 @@ const initialScore: LiveScore = {
   opponentSets: 0,
   currentServer: 'PLAYER',
   isTiebreak: false,
+  isMatchTiebreak: false,
   isDeuce: false,
 };
 
@@ -250,6 +344,10 @@ export const useMatchStore = create<MatchState>((set, get) => ({
   pressureContext: null,
   pressurePromptDismissed: false,
 
+  // Tiebreak UI
+  courtSide: 'DEUCE',
+  showChangeEnds: false,
+
   // Undo
   undoStack: [],
   canUndo: false,
@@ -268,6 +366,11 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     const setId = uid();
     const gameId = uid();
 
+    const isMatchTiebreak =
+      setup.format === 'BEST_OF_3' &&
+      setup.thirdSetFormat === '10-point-match-tiebreak' &&
+      false; // only applies at 1-1 sets — not at start
+
     const dbMatch: DBMatch = {
       id: matchId,
       playerName: setup.playerName,
@@ -278,6 +381,9 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       status: 'IN_PROGRESS',
       firstServer: setup.firstServer,
       synced: 0,
+      tiebreakProcedure: setup.tiebreakProcedure,
+      thirdSetFormat: setup.thirdSetFormat,
+      scoringFormat: setup.scoringFormat,
     };
 
     const dbSet: DBSet = {
@@ -319,10 +425,13 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       pendingPointFlags: [],
       pressureContext: null,
       pressurePromptDismissed: false,
+      courtSide: 'DEUCE',
+      showChangeEnds: false,
       unsyncedCount,
       score: {
         ...initialScore,
         currentServer: setup.firstServer,
+        isMatchTiebreak: false,
       },
     });
   },
@@ -353,7 +462,11 @@ export const useMatchStore = create<MatchState>((set, get) => ({
   confirmPoint: async (classification, shotType) => {
     const state = get();
     const winner = state.pendingPointWinner!;
-    const { score, matchId, currentSetId, currentGameId, pointsInGame } = state;
+    const { score, matchId, currentSetId, currentGameId, pointsInGame, setup } = state;
+
+    const scoringFormat: ScoringFormat = setup?.scoringFormat ?? 'ad';
+    const tiebreakProcedure: TiebreakProcedure = setup?.tiebreakProcedure ?? 'standard';
+    const thirdSetFormat: ThirdSetFormat = setup?.thirdSetFormat ?? 'full-set';
 
     // Build undo snapshot BEFORE mutating
     const undoSnapshot: UndoSnapshot = {
@@ -363,6 +476,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       currentGameId: currentGameId!,
       setsPlayed: [...state.setsPlayed],
       phase: 'PLAYING',
+      showChangeEnds: state.showChangeEnds,
       pointId: '', // filled after creating the point
     };
 
@@ -392,26 +506,34 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     const newScore = { ...score };
     let gameWon = false;
     let gameWinner: 'PLAYER' | 'OPPONENT' | null = null;
+    let triggerChangeEnds = false;
 
-    if (score.isTiebreak) {
-      // Tiebreak scoring
+    if (score.isTiebreak || score.isMatchTiebreak) {
+      // === TIEBREAK scoring ===
       if (winner === 'PLAYER') newScore.playerPoints++;
       else newScore.opponentPoints++;
 
       const p = newScore.playerPoints;
       const o = newScore.opponentPoints;
-      if ((p >= 7 || o >= 7) && Math.abs(p - o) >= 2) {
+      const tbTarget = score.isMatchTiebreak ? 10 : 7;
+
+      if ((p >= tbTarget || o >= tbTarget) && Math.abs(p - o) >= 2) {
         gameWon = true;
         gameWinner = p > o ? 'PLAYER' : 'OPPONENT';
       }
 
-      // Server alternates every 2 points in tiebreak (after the first)
-      const totalTBPoints = newScore.playerPoints + newScore.opponentPoints;
-      if (totalTBPoints === 1 || (totalTBPoints > 1 && (totalTBPoints - 1) % 2 === 0)) {
-        newScore.currentServer = newScore.currentServer === 'PLAYER' ? 'OPPONENT' : 'PLAYER';
-      }
+      // Service rotation: 1-2-2-2 pattern
+      const totalTBPointsAfter = newScore.playerPoints + newScore.opponentPoints;
+      const firstServer = score.tiebreakFirstServer ?? score.currentServer;
+      newScore.currentServer = tiebreakServerForPoint(totalTBPointsAfter, firstServer);
+
+      // Preserve tiebreakFirstServer through the tiebreak
+      newScore.tiebreakFirstServer = firstServer;
+
+      // Change of ends
+      triggerChangeEnds = shouldChangeEnds(totalTBPointsAfter, tiebreakProcedure);
     } else {
-      // Standard game scoring
+      // === Standard game scoring ===
       if (winner === 'PLAYER') newScore.playerPoints = nextPointScore(score.playerPoints);
       else newScore.opponentPoints = nextPointScore(score.opponentPoints);
 
@@ -420,16 +542,31 @@ export const useMatchStore = create<MatchState>((set, get) => ({
 
       if (p >= 3 && o >= 3) {
         // Deuce territory
-        if (p === o) {
-          newScore.isDeuce = true;
-          newScore.advantage = undefined;
-        } else if (Math.abs(p - o) === 1) {
-          newScore.isDeuce = false;
-          newScore.advantage = p > o ? 'PLAYER' : 'OPPONENT';
+        if (scoringFormat === 'no-ad') {
+          // No-Ad: at 40-40 (both >= 3 and equal), it's a deciding point
+          // The next point wins. So if someone just scored and they're now ahead, they win.
+          if (p === o) {
+            // Deuce — next point is deciding
+            newScore.isDeuce = true;
+            newScore.advantage = undefined;
+          } else {
+            // Someone just scored the deciding point
+            gameWon = true;
+            gameWinner = p > o ? 'PLAYER' : 'OPPONENT';
+          }
         } else {
-          // Won from advantage
-          gameWon = true;
-          gameWinner = p > o ? 'PLAYER' : 'OPPONENT';
+          // Advantage scoring
+          if (p === o) {
+            newScore.isDeuce = true;
+            newScore.advantage = undefined;
+          } else if (Math.abs(p - o) === 1) {
+            newScore.isDeuce = false;
+            newScore.advantage = p > o ? 'PLAYER' : 'OPPONENT';
+          } else {
+            // Won from advantage
+            gameWon = true;
+            gameWinner = p > o ? 'PLAYER' : 'OPPONENT';
+          }
         }
       } else if (p >= 4 || o >= 4) {
         gameWon = true;
@@ -438,6 +575,12 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     }
 
     if (!gameWon) {
+      // Compute court side for the NEXT point
+      const totalPointsInGame = pointsInGame + 1; // 0-indexed: this becomes the index of the next point
+      const nextCourtSide = (score.isTiebreak || score.isMatchTiebreak)
+        ? tiebreakCourtSide(newScore.playerPoints + newScore.opponentPoints)
+        : standardCourtSide(totalPointsInGame);
+
       // Detect pressure context for the NEXT point
       const pressure = detectPressureContext(newScore, state.setup!.format);
       const newUndoStack = [...state.undoStack, undoSnapshot];
@@ -451,6 +594,8 @@ export const useMatchStore = create<MatchState>((set, get) => ({
         phase: 'PLAYING',
         pressureContext: pressure,
         pressurePromptDismissed: false,
+        courtSide: nextCourtSide,
+        showChangeEnds: triggerChangeEnds,
         undoStack: newUndoStack,
         canUndo: true,
       });
@@ -472,16 +617,18 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     const pg = newScore.playerGames;
     const og = newScore.opponentGames;
 
-    if (score.isTiebreak) {
-      // Tiebreak game was just won
+    if (score.isTiebreak || score.isMatchTiebreak) {
+      // Tiebreak game was just won — set is won
       setWon = true;
       setWinner = gameWinner;
     } else if ((pg >= 6 || og >= 6) && Math.abs(pg - og) >= 2) {
       setWon = true;
       setWinner = pg > og ? 'PLAYER' : 'OPPONENT';
     } else if (pg === 6 && og === 6) {
-      // Enter tiebreak
+      // Enter tiebreak at 6-6
       newScore.isTiebreak = true;
+      // The server for the tiebreak is whoever's turn it is
+      // (already set by normal alternation below)
     }
 
     // Reset point scores for next game
@@ -490,9 +637,19 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     newScore.isDeuce = false;
     newScore.advantage = undefined;
 
-    // Alternate server (normal games; tiebreak handled above)
-    if (!score.isTiebreak) {
+    // Alternate server for standard games (tiebreak handled internally)
+    if (!score.isTiebreak && !score.isMatchTiebreak) {
       newScore.currentServer = score.currentServer === 'PLAYER' ? 'OPPONENT' : 'PLAYER';
+    } else {
+      // After a tiebreak, the RECEIVER of the first tiebreak point serves first in next set
+      const tbFirst = score.tiebreakFirstServer ?? score.currentServer;
+      newScore.currentServer = tbFirst === 'PLAYER' ? 'OPPONENT' : 'PLAYER';
+      newScore.tiebreakFirstServer = undefined;
+    }
+
+    // When entering a tiebreak (6-6), set the tiebreak first server
+    if (!setWon && newScore.isTiebreak) {
+      newScore.tiebreakFirstServer = newScore.currentServer;
     }
 
     if (!setWon) {
@@ -524,6 +681,8 @@ export const useMatchStore = create<MatchState>((set, get) => ({
         phase: 'PLAYING',
         pressureContext: pressure,
         pressurePromptDismissed: false,
+        courtSide: 'DEUCE',
+        showChangeEnds: false,
         undoStack: newUndoStack,
         canUndo: true,
       });
@@ -543,11 +702,15 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       playerGames: newScore.playerGames,
       opponentGames: newScore.opponentGames,
       winner: setWinner as 'PLAYER' | 'OPPONENT',
-      tiebreak: score.isTiebreak,
+      tiebreak: score.isTiebreak || score.isMatchTiebreak,
     });
 
     if (setWinner === 'PLAYER') newScore.playerSets++;
     else newScore.opponentSets++;
+
+    // Reset tiebreak flags for the new set
+    newScore.isTiebreak = false;
+    newScore.isMatchTiebreak = false;
 
     // Check match won
     const setsToWin = getSetsToWin(state.setup!.format);
@@ -563,6 +726,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
         pendingPointFlags: [],
         phase: 'FINISHED',
         pressureContext: null,
+        showChangeEnds: false,
         undoStack: newUndoStack,
         canUndo: true,
       });
@@ -572,17 +736,24 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     // Start new set
     newScore.playerGames = 0;
     newScore.opponentGames = 0;
-    newScore.isTiebreak = false;
+
+    // Check if this is the deciding set and should be a match tiebreak
+    const totalSetsPlayed = newScore.playerSets + newScore.opponentSets;
+    const isDecidingSet = newScore.playerSets === newScore.opponentSets; // e.g. 1-1
+    const shouldBeMatchTiebreak =
+      isDecidingSet &&
+      thirdSetFormat === '10-point-match-tiebreak' &&
+      totalSetsPlayed >= 2; // only for 3rd+ set
 
     const newSetId = uid();
-    const setNum = newScore.playerSets + newScore.opponentSets + 1;
+    const setNum = totalSetsPlayed + 1;
     const newSet: DBSet = {
       id: newSetId,
       matchId: matchId!,
       setNumber: setNum,
       playerGames: 0,
       opponentGames: 0,
-      tiebreak: false,
+      tiebreak: shouldBeMatchTiebreak,
     };
     await db.sets.add(newSet);
 
@@ -593,9 +764,15 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       matchId: matchId!,
       gameNumber: 1,
       server: newScore.currentServer,
-      isTiebreak: false,
+      isTiebreak: shouldBeMatchTiebreak,
     };
     await db.games.add(newGame);
+
+    if (shouldBeMatchTiebreak) {
+      newScore.isMatchTiebreak = true;
+      newScore.isTiebreak = true;
+      newScore.tiebreakFirstServer = newScore.currentServer;
+    }
 
     undoSnapshot.createdSetId = newSetId;
     undoSnapshot.createdGameId = newGameId;
@@ -615,6 +792,8 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       phase: 'PLAYING',
       pressureContext: pressure,
       pressurePromptDismissed: false,
+      courtSide: 'DEUCE',
+      showChangeEnds: false,
       undoStack: newUndoStack,
       canUndo: true,
     });
@@ -634,6 +813,8 @@ export const useMatchStore = create<MatchState>((set, get) => ({
   },
 
   dismissPressurePrompt: () => set({ pressurePromptDismissed: true }),
+
+  dismissChangeEnds: () => set({ showChangeEnds: false }),
 
   /* ---- Undo (Section 17) ---- */
 
@@ -672,10 +853,16 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       await db.matches.update(state.matchId, { status: snapshot.previousMatchStatus });
     }
 
-    // 7. Restore in-memory state
+    // 7. Restore in-memory state (including court side and change-ends)
     const pressure = state.setup
       ? detectPressureContext(snapshot.score, state.setup.format)
       : null;
+
+    // Recompute court side from the restored score
+    const restoredTotal = snapshot.score.playerPoints + snapshot.score.opponentPoints;
+    const restoredCourtSide = (snapshot.score.isTiebreak || snapshot.score.isMatchTiebreak)
+      ? tiebreakCourtSide(restoredTotal)
+      : standardCourtSide(snapshot.pointsInGame);
 
     set({
       score: snapshot.score,
@@ -690,6 +877,8 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       pendingPointFlags: [],
       pressureContext: pressure,
       pressurePromptDismissed: false,
+      courtSide: restoredCourtSide,
+      showChangeEnds: snapshot.showChangeEnds,
       undoStack: newStack,
       canUndo: newStack.length > 0,
     });
@@ -737,6 +926,8 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       pendingPointFlags: [],
       pressureContext: null,
       pressurePromptDismissed: false,
+      courtSide: 'DEUCE',
+      showChangeEnds: false,
       undoStack: [],
       canUndo: false,
     });
@@ -811,7 +1002,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     const { score } = get();
     const pts = side === 'PLAYER' ? score.playerPoints : score.opponentPoints;
 
-    if (score.isTiebreak) return String(pts);
+    if (score.isTiebreak || score.isMatchTiebreak) return String(pts);
 
     if (score.isDeuce && score.playerPoints === score.opponentPoints) return '40';
     if (score.advantage === side) return 'AD';
