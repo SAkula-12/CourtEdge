@@ -440,20 +440,199 @@ function CourtSideIndicator() {
 
 function TiebreakBadge() {
   const score = useMatchStore((s) => s.score);
+  const target = score.tiebreakTargetPoints || (score.isMatchTiebreak ? 10 : 7);
 
   if (score.isMatchTiebreak) {
     return (
       <span className="text-xs font-bold uppercase tracking-wider text-rose-400 bg-rose-400/10 px-3 py-1 rounded-full border border-rose-400/20 animate-pulse">
-        Match Tiebreak — First to 10
+        Match Tiebreak — First to {target}
       </span>
     );
   }
 
   if (score.isTiebreak) {
     return (
-      <span className="text-xs font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 px-3 py-1 rounded-full">
-        Tiebreak
+      <span className="text-xs font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 px-3 py-1 rounded-full border border-amber-400/20">
+        Tiebreak — First to {target}
       </span>
+    );
+  }
+
+  return null;
+}
+
+/* ---------- Interactive Decision Modals for Tiebreaks ---------- */
+
+function DecisionModal() {
+  const pendingDecision = useMatchStore((s) => s.pendingDecision);
+  const score = useMatchStore((s) => s.score);
+  const setup = useMatchStore((s) => s.setup);
+  const resolveSetTiebreakDecision = useMatchStore((s) => s.resolveSetTiebreakDecision);
+  const resolveMatchTiebreakDecision = useMatchStore((s) => s.resolveMatchTiebreakDecision);
+
+  const [step, setStep] = useState<'CHOICE' | 'POINTS'>('CHOICE');
+  const [customPoints, setCustomPoints] = useState<number>(7);
+
+  useEffect(() => {
+    setStep('CHOICE');
+    if (pendingDecision === 'SET_TIEBREAK') {
+      setCustomPoints(7);
+    } else if (pendingDecision === 'MATCH_TIEBREAK') {
+      setCustomPoints(10);
+    }
+  }, [pendingDecision]);
+
+  if (!pendingDecision) return null;
+
+  if (pendingDecision === 'SET_TIEBREAK') {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 p-6 text-center">
+          <div className="mx-auto w-12 h-12 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center mb-4 text-amber-400">
+            <Trophy size={24} />
+          </div>
+
+          <h3 className="text-xl font-bold text-white mb-2">Set Tiebreak Decision</h3>
+          <p className="text-slate-300 text-sm mb-6">
+            Games are tied at <span className="text-amber-400 font-bold">{score.playerGames}–{score.opponentGames}</span>. Play a tiebreak or continue (Win by 2)?
+          </p>
+
+          {step === 'CHOICE' ? (
+            <div className="space-y-3">
+              <button
+                onClick={() => {
+                  triggerHaptic(50);
+                  setCustomPoints(7);
+                  setStep('POINTS');
+                }}
+                className="w-full py-3.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm shadow-lg shadow-amber-600/20 active:scale-95 transition-all"
+              >
+                Play Tiebreak
+              </button>
+              <button
+                onClick={() => {
+                  triggerHaptic(40);
+                  resolveSetTiebreakDecision(false);
+                }}
+                className="w-full py-3.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-sm border border-slate-700 active:scale-95 transition-all"
+              >
+                Continue (Win by 2)
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4 text-left animate-in fade-in duration-200">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                Play to how many points?
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={1}
+                  max={99}
+                  value={customPoints}
+                  onChange={(e) => setCustomPoints(Math.max(1, parseInt(e.target.value, 10) || 7))}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white text-lg font-bold text-center focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setStep('CHOICE')}
+                  className="flex-1 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-sm border border-slate-700"
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic(60);
+                    resolveSetTiebreakDecision(true, customPoints);
+                  }}
+                  className="flex-[2] py-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm shadow-lg shadow-amber-600/20 active:scale-95 transition-all"
+                >
+                  Start Tiebreak ({customPoints} pts)
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (pendingDecision === 'MATCH_TIEBREAK') {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 p-6 text-center">
+          <div className="mx-auto w-12 h-12 rounded-xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center mb-4 text-rose-400">
+            <Trophy size={24} />
+          </div>
+
+          <h3 className="text-xl font-bold text-white mb-2">Final Set Decision</h3>
+          <p className="text-slate-300 text-sm mb-6">
+            Sets are tied at <span className="text-rose-400 font-bold">{score.playerSets}–{score.opponentSets}</span>. Play a full set or a Match Tiebreak?
+          </p>
+
+          {step === 'CHOICE' ? (
+            <div className="space-y-3">
+              <button
+                onClick={() => {
+                  triggerHaptic(50);
+                  setCustomPoints(10);
+                  setStep('POINTS');
+                }}
+                className="w-full py-3.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-sm shadow-lg shadow-rose-600/20 active:scale-95 transition-all"
+              >
+                Match Tiebreak
+              </button>
+              <button
+                onClick={() => {
+                  triggerHaptic(40);
+                  resolveMatchTiebreakDecision(false);
+                }}
+                className="w-full py-3.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-sm border border-slate-700 active:scale-95 transition-all"
+              >
+                Play Full Set
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4 text-left animate-in fade-in duration-200">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                Play to how many points?
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={1}
+                  max={99}
+                  value={customPoints}
+                  onChange={(e) => setCustomPoints(Math.max(1, parseInt(e.target.value, 10) || 10))}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white text-lg font-bold text-center focus:outline-none focus:ring-2 focus:ring-rose-500"
+                />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setStep('CHOICE')}
+                  className="flex-1 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-sm border border-slate-700"
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic(60);
+                    resolveMatchTiebreakDecision(true, customPoints);
+                  }}
+                  className="flex-[2] py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-sm shadow-lg shadow-rose-600/20 active:scale-95 transition-all"
+                >
+                  Start Tiebreak ({customPoints} pts)
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     );
   }
 
@@ -669,10 +848,12 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
     
     if (role === 'PRIMARY') {
       const unsub = useMatchStore.subscribe((state, prevState) => {
-        if (state.score !== prevState.score || state.setup !== prevState.setup || state.phase !== prevState.phase) {
+        if (state.score !== prevState.score || state.setup !== prevState.setup || state.phase !== prevState.phase || state.pendingDecision !== prevState.pendingDecision) {
           const serializableState = {
             setup: state.setup,
             score: state.score,
+            targetGames: state.targetGames,
+            pendingDecision: state.pendingDecision,
             currentSetId: state.currentSetId,
             currentGameId: state.currentGameId,
             pointsInGame: state.pointsInGame,
@@ -690,6 +871,8 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
       const initialSerializableState = {
         setup: currentState.setup,
         score: currentState.score,
+        targetGames: currentState.targetGames,
+        pendingDecision: currentState.pendingDecision,
         currentSetId: currentState.currentSetId,
         currentGameId: currentState.currentGameId,
         pointsInGame: currentState.pointsInGame,
@@ -720,6 +903,8 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
             ...prev,
             setup: s.setup,
             score: s.score,
+            targetGames: s.targetGames,
+            pendingDecision: s.pendingDecision,
             currentSetId: s.currentSetId,
             currentGameId: s.currentGameId,
             pointsInGame: s.pointsInGame,
@@ -828,6 +1013,9 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
   /* ---- Live scoring ---- */
   return (
     <div className="max-w-lg mx-auto p-4 md:p-10 animate-in fade-in">
+      {/* Dynamic decision modal for tiebreak prompts */}
+      <DecisionModal />
+
       {/* Finish match options modal */}
       <FinishMatchModal
         isOpen={isFinishModalOpen}
