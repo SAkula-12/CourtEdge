@@ -9,7 +9,7 @@ export interface DBMatch {
   date: string;           // ISO string for IndexedDB compatibility
   surface: string;
   format: 'BEST_OF_1' | 'BEST_OF_3' | 'BEST_OF_5';
-  status: 'IN_PROGRESS' | 'COMPLETED' | 'ABANDONED';
+  status: 'IN_PROGRESS' | 'COMPLETED' | 'ABANDONED' | 'SUSPENDED';
   firstServer: 'PLAYER' | 'OPPONENT';
   synced: 0 | 1;          // 0 = pending, 1 = synced (indexable number)
   // Tournament-grade scoring settings (v3)

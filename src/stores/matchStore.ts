@@ -82,7 +82,7 @@ interface UndoSnapshot {
   previousSetData?: Partial<DBSet>;
   previousGameWinner?: 'PLAYER' | 'OPPONENT' | undefined;
   /** If match status was changed */
-  previousMatchStatus?: 'IN_PROGRESS' | 'COMPLETED';
+  previousMatchStatus?: 'IN_PROGRESS' | 'COMPLETED' | 'SUSPENDED';
 }
 
 interface MatchState {
@@ -140,6 +140,7 @@ interface MatchState {
   undoLastPoint: () => Promise<void>;
   finishMatch: (reason?: 'COMPLETED' | 'PLAYER_FORFEIT' | 'OPPONENT_FORFEIT' | 'CANCEL') => Promise<void>;
   resetMatch: () => void;
+  suspendMatch: () => Promise<void>;
   saveGameNote: (text: string) => Promise<void>;
   saveMatchNote: (text: string) => Promise<void>;
   refreshSyncStatus: () => Promise<void>;
@@ -969,6 +970,39 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     });
   },
 
+  /* ---- Match Suspension / Rain Delay ---- */
+
+  suspendMatch: async () => {
+    const state = get();
+    if (!state.matchId) return;
+
+    // Mark the match as SUSPENDED in Dexie
+    await db.matches.update(state.matchId, { status: 'SUSPENDED' });
+
+    // Clear the entire Zustand store back to IDLE
+    set({
+      phase: 'IDLE',
+      matchId: null,
+      setup: null,
+      score: { ...initialScore },
+      pendingPointWinner: null,
+      pendingClassification: null,
+      currentSetId: null,
+      currentGameId: null,
+      pointsInGame: 0,
+      setsPlayed: [],
+      pendingPointNote: '',
+      pendingPointFlags: [],
+      pressureContext: null,
+      pressurePromptDismissed: false,
+      courtSide: 'DEUCE',
+      showChangeEnds: false,
+      changeEndsReason: undefined,
+      undoStack: [],
+      canUndo: false,
+    });
+  },
+
   /* ---- Notes (Section 16) ---- */
 
   saveGameNote: async (text) => {
@@ -1045,7 +1079,11 @@ export const useMatchStore = create<MatchState>((set, get) => ({
 
     try {
       // Query Dexie database for the most recent match that has not been completed
+      // Also find SUSPENDED matches (rain delay / resume flow)
       let activeMatch = await db.matches.where('status').equals('IN_PROGRESS').last();
+      if (!activeMatch) {
+        activeMatch = await db.matches.where('status').equals('SUSPENDED').last();
+      }
       if (!activeMatch) {
         activeMatch = await db.matches.where('status').equals('in-progress').last();
       }
@@ -1054,7 +1092,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
         activeMatch = allMatches
           .filter((m) => {
             const st = (m.status || '').toLowerCase();
-            return st === 'in_progress' || st === 'in-progress';
+            return st === 'in_progress' || st === 'in-progress' || st === 'suspended';
           })
           .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
       }
@@ -1239,6 +1277,11 @@ export const useMatchStore = create<MatchState>((set, get) => ({
 
       const setsToWin = getSetsToWin(setup.format);
       const isFinished = playerSets >= setsToWin || opponentSets >= setsToWin;
+
+      // If match was SUSPENDED, re-mark it as IN_PROGRESS on resume
+      if (activeMatch.status === 'SUSPENDED') {
+        await db.matches.update(activeMatch.id, { status: 'IN_PROGRESS' });
+      }
 
       set({
         phase: isFinished ? 'FINISHED' : 'PLAYING',

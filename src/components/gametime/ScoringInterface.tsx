@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { useMatchStore } from "@/stores/matchStore";
 import { PointClassification } from "@/models/types";
-import { Undo2, CheckCircle2, ArrowRight, Check, X, RotateCcw, Trophy, Save, Mic, MicOff, MessageSquare } from "lucide-react";
+import { Undo2, CheckCircle2, ArrowRight, Check, X, RotateCcw, Trophy, Save, Mic, MicOff, MessageSquare, PauseCircle, CloudRain, ChevronDown } from "lucide-react";
 import { CriticalPointFlags } from "./CriticalPointFlags";
 import { PressurePrompt } from "./PressurePrompt";
 import { NotesPanel } from "./NotesPanel";
@@ -546,9 +547,60 @@ export function ScoringInterface() {
 
   const [isFinishModalOpen, setIsFinishModalOpen] = useState(false);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
+  const [showSuspendMenu, setShowSuspendMenu] = useState(false);
+  const suspendMatch = useMatchStore((s) => s.suspendMatch);
+  const router = useRouter();
 
   const playerLabel = setup?.playerName || "Player";
   const opponentLabel = setup?.opponentName || "Opponent";
+
+  /* ---- Screen Wake Lock (Specification 1) ---- */
+  useEffect(() => {
+    let wakeLock: WakeLockSentinel | null = null;
+    let isMounted = true;
+
+    const requestWakeLock = async () => {
+      try {
+        if ('wakeLock' in navigator && isMounted) {
+          wakeLock = await navigator.wakeLock.request('screen');
+          wakeLock.addEventListener('release', () => {
+            // Wake lock was released (e.g., tab switch or screen off)
+          });
+        }
+      } catch (err) {
+        // Wake lock request failed (e.g., low battery, permissions)
+        console.warn('Wake Lock request failed:', err);
+      }
+    };
+
+    // Request on mount
+    requestWakeLock();
+
+    // Re-request when the page becomes visible again
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && isMounted) {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      isMounted = false;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (wakeLock) {
+        wakeLock.release().catch(() => {});
+        wakeLock = null;
+      }
+    };
+  }, []);
+
+  /* ---- Suspend Match handler ---- */
+  const handleSuspend = useCallback(async () => {
+    triggerHaptic(60);
+    setShowSuspendMenu(false);
+    await suspendMatch();
+    router.push('/gametime');
+  }, [suspendMatch, router]);
 
   /* ---- Match finished ---- */
   if (phase === "FINISHED") {
@@ -644,8 +696,38 @@ export function ScoringInterface() {
 
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl md:text-2xl font-bold">Live Scoring</h1>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <TiebreakBadge />
+
+          {/* Suspend Match dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => { triggerHaptic(); setShowSuspendMenu(!showSuspendMenu); }}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-semibold transition-all"
+              title="Suspend match (rain delay)"
+            >
+              <PauseCircle size={13} />
+              <span className="hidden sm:inline">Suspend</span>
+            </button>
+            {showSuspendMenu && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowSuspendMenu(false)} />
+                <div className="absolute right-0 top-full mt-1 z-50 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl shadow-black/40 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
+                  <button
+                    onClick={handleSuspend}
+                    className="w-full flex items-center gap-3 px-4 py-3 text-sm text-amber-300 hover:bg-amber-500/10 transition-colors text-left"
+                  >
+                    <CloudRain size={16} className="shrink-0 text-amber-400" />
+                    <div>
+                      <div className="font-semibold">Suspend Match</div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">Rain delay, break, or pause — resume later</div>
+                    </div>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
           <button
             onClick={() => { triggerHaptic(); setIsFinishModalOpen(true); }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-semibold transition-all"
