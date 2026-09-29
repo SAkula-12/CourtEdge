@@ -244,15 +244,15 @@ export function MatchSetupForm() {
                 </div>
               </div>
 
-              {/* Tiebreak Procedure */}
+              {/* Changeover Procedure */}
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-                  Tiebreak Changeover
+                  Changeover Procedure
                   <span className="ml-2 text-slate-600 normal-case font-normal">When to switch sides</span>
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   {([
-                    { value: 'standard' as const, label: 'Standard', desc: 'Every 6 points' },
+                    { value: 'standard' as const, label: 'Standard', desc: 'End of every odd game (1st, 3rd, 5th, etc.)' },
                     { value: 'coman' as const, label: 'Coman', desc: 'After 1st, then every 4' },
                   ]).map((opt) => {
                     const isActive = form.tiebreakProcedure === opt.value;

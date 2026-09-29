@@ -68,6 +68,7 @@ interface UndoSnapshot {
   phase: MatchState['phase'];
   /** Whether a change-ends banner was showing */
   showChangeEnds: boolean;
+  changeEndsReason?: string;
   /** DB entities to delete on undo */
   pointId: string;
   /** If the point ended a game, we created a new game — need to delete it too */
@@ -108,6 +109,8 @@ interface MatchState {
   // Tiebreak UI state
   courtSide: CourtSide;
   showChangeEnds: boolean;
+  changeEndsReason?: string;
+
 
   // Undo stack (Section 17)
   undoStack: UndoSnapshot[];
@@ -352,6 +355,8 @@ export const useMatchStore = create<MatchState>((set, get) => ({
   // Tiebreak UI
   courtSide: 'DEUCE',
   showChangeEnds: false,
+  changeEndsReason: undefined,
+
 
   // Undo
   undoStack: [],
@@ -433,6 +438,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       pressurePromptDismissed: false,
       courtSide: 'DEUCE',
       showChangeEnds: false,
+      changeEndsReason: undefined,
       unsyncedCount,
       score: {
         ...initialScore,
@@ -483,6 +489,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       setsPlayed: [...state.setsPlayed],
       phase: 'PLAYING',
       showChangeEnds: state.showChangeEnds,
+      changeEndsReason: state.changeEndsReason,
       pointId: '', // filled after creating the point
     };
 
@@ -513,6 +520,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
     let gameWon = false;
     let gameWinner: 'PLAYER' | 'OPPONENT' | null = null;
     let triggerChangeEnds = false;
+    let changeEndsMsg: string | undefined = undefined;
 
     if (score.isTiebreak || score.isMatchTiebreak) {
       // === TIEBREAK scoring ===
@@ -536,8 +544,13 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       // Preserve tiebreakFirstServer through the tiebreak
       newScore.tiebreakFirstServer = firstServer;
 
-      // Change of ends
+      // Change of ends in tiebreak
       triggerChangeEnds = shouldChangeEnds(totalTBPointsAfter, tiebreakProcedure);
+      if (triggerChangeEnds) {
+        changeEndsMsg = tiebreakProcedure === 'coman'
+          ? `Coman changeover (point ${totalTBPointsAfter}) — switch sides`
+          : `Tiebreak changeover (${totalTBPointsAfter} points) — switch sides`;
+      }
     } else {
       // === Standard game scoring ===
       if (winner === 'PLAYER') newScore.playerPoints = nextPointScore(score.playerPoints);
@@ -602,6 +615,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
         pressurePromptDismissed: false,
         courtSide: nextCourtSide,
         showChangeEnds: triggerChangeEnds,
+        changeEndsReason: changeEndsMsg,
         undoStack: newUndoStack,
         canUndo: true,
       });
@@ -677,6 +691,10 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       const pressure = detectPressureContext(newScore, state.setup!.format);
       const newUndoStack = [...state.undoStack, undoSnapshot];
 
+      // Standard changeover: players change ends at the end of the 1st, 3rd, 5th, and every subsequent odd game
+      const totalCompletedGames = pg + og;
+      const isOddGameChange = totalCompletedGames % 2 !== 0;
+
       set({
         score: newScore,
         pendingPointWinner: null,
@@ -688,12 +706,16 @@ export const useMatchStore = create<MatchState>((set, get) => ({
         pressureContext: pressure,
         pressurePromptDismissed: false,
         courtSide: 'DEUCE',
-        showChangeEnds: false,
+        showChangeEnds: isOddGameChange,
+        changeEndsReason: isOddGameChange
+          ? `End of game ${totalCompletedGames} (odd game) — switch sides`
+          : undefined,
         undoStack: newUndoStack,
         canUndo: true,
       });
       return;
     }
+
 
     // 4. Set won
     undoSnapshot.previousSetId = currentSetId!;
@@ -739,7 +761,10 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       return;
     }
 
-    // Start new set
+    // Start new set: players change ends if the set ended with an odd number of games
+    const previousSetCompletedGames = newScore.playerGames + newScore.opponentGames;
+    const isOddSetChange = previousSetCompletedGames % 2 !== 0;
+
     newScore.playerGames = 0;
     newScore.opponentGames = 0;
 
@@ -799,7 +824,10 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       pressureContext: pressure,
       pressurePromptDismissed: false,
       courtSide: 'DEUCE',
-      showChangeEnds: false,
+      showChangeEnds: isOddSetChange,
+      changeEndsReason: isOddSetChange
+        ? `End of set (${previousSetCompletedGames} games, odd) — switch sides`
+        : undefined,
       undoStack: newUndoStack,
       canUndo: true,
     });
@@ -820,7 +848,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
 
   dismissPressurePrompt: () => set({ pressurePromptDismissed: true }),
 
-  dismissChangeEnds: () => set({ showChangeEnds: false }),
+  dismissChangeEnds: () => set({ showChangeEnds: false, changeEndsReason: undefined }),
 
   /* ---- Undo (Section 17) ---- */
 
@@ -885,6 +913,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       pressurePromptDismissed: false,
       courtSide: restoredCourtSide,
       showChangeEnds: snapshot.showChangeEnds,
+      changeEndsReason: snapshot.changeEndsReason,
       undoStack: newStack,
       canUndo: newStack.length > 0,
     });
@@ -934,6 +963,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       pressurePromptDismissed: false,
       courtSide: 'DEUCE',
       showChangeEnds: false,
+      changeEndsReason: undefined,
       undoStack: [],
       canUndo: false,
     });
@@ -1227,6 +1257,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
         pressurePromptDismissed: false,
         courtSide,
         showChangeEnds: false,
+        changeEndsReason: undefined,
         undoStack: [],
         canUndo: false,
         unsyncedCount,

@@ -352,6 +352,7 @@ function ScoreDisplay() {
 
 function ChangeEndsBanner() {
   const showChangeEnds = useMatchStore((s) => s.showChangeEnds);
+  const changeEndsReason = useMatchStore((s) => s.changeEndsReason);
   const dismissChangeEnds = useMatchStore((s) => s.dismissChangeEnds);
 
   if (!showChangeEnds) return null;
@@ -363,7 +364,9 @@ function ChangeEndsBanner() {
       </div>
       <div className="flex-1">
         <div className="text-sm font-bold text-orange-300 uppercase tracking-wider">Change Ends</div>
-        <div className="text-xs text-orange-400/70 mt-0.5">Players switch sides of the court</div>
+        <div className="text-xs text-orange-400/80 mt-0.5">
+          {changeEndsReason || "Players switch sides of the court"}
+        </div>
       </div>
       <button
         onClick={dismissChangeEnds}
@@ -375,6 +378,7 @@ function ChangeEndsBanner() {
     </div>
   );
 }
+
 
 /* ---------- Court Side Indicator ---------- */
 
