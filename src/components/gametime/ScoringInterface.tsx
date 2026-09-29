@@ -627,15 +627,17 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
 
     const requestWakeLock = async () => {
       try {
-        if ('wakeLock' in navigator && isMounted) {
+        if ('wakeLock' in navigator && isMounted && document.visibilityState === 'visible') {
           wakeLock = await navigator.wakeLock.request('screen');
           wakeLock.addEventListener('release', () => {
             // Wake lock was released (e.g., tab switch or screen off)
           });
         }
-      } catch (err) {
-        // Wake lock request failed (e.g., low battery, permissions)
-        console.warn('Wake Lock request failed:', err);
+      } catch (err: any) {
+        // Ignore expected NotAllowedError (e.g., page hidden or unfocused)
+        if (err?.name !== 'NotAllowedError') {
+          console.warn('Wake Lock request failed:', err);
+        }
       }
     };
 
