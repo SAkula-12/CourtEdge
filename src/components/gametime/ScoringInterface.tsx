@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useMatchStore } from "@/stores/matchStore";
 import { PointClassification } from "@/models/types";
-import { Undo2, CheckCircle2, ArrowRight, Check, X, RotateCcw, Trophy, Save, Mic, MicOff, MessageSquare, PauseCircle, CloudRain, ChevronDown, ArrowLeftRight } from "lucide-react";
+import { Undo2, CheckCircle2, ArrowRight, Check, X, RotateCcw, Trophy, Save, Mic, MicOff, MessageSquare, PauseCircle, CloudRain, ChevronDown, ArrowLeftRight, QrCode, Send, ArrowLeft } from "lucide-react";
 import { CriticalPointFlags } from "./CriticalPointFlags";
 import { PressurePrompt } from "./PressurePrompt";
 import { NotesPanel } from "./NotesPanel";
@@ -12,6 +12,8 @@ import { SyncIndicator } from "./SyncIndicator";
 import { FlaggedPointsSummary } from "./FlaggedPointsSummary";
 import { NotesLog } from "./NotesLog";
 import { FinishMatchModal } from "./FinishMatchModal";
+import { MatchShareQR } from "@/components/share/MatchShareQR";
+import { GuestMatchTransferUI } from "./GuestMatchTransferUI";
 import { triggerHaptic } from "@/lib/haptics";
 
 /* ---------- Quick Tags Array (Specification 1) ---------- */
@@ -490,6 +492,7 @@ function MatchCompletionModal({
   opponentName,
   playerSets,
   opponentSets,
+  matchId,
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -498,57 +501,93 @@ function MatchCompletionModal({
   opponentName: string;
   playerSets: number;
   opponentSets: number;
+  matchId: string | null;
 }) {
+  const [showTransferUI, setShowTransferUI] = useState(false);
+
   if (!isOpen) return null;
 
   const winner = playerSets > opponentSets ? playerName : opponentName;
 
+  const handleCloseModal = () => {
+    setShowTransferUI(false);
+    onClose();
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onClick={(e) => { if (e.target === e.currentTarget) handleCloseModal(); }}
     >
-      <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl shadow-black/50 animate-in zoom-in-95 fade-in slide-in-from-bottom-4 duration-300 overflow-hidden">
+      <div className="w-full max-w-lg bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl shadow-black/50 animate-in zoom-in-95 fade-in slide-in-from-bottom-4 duration-300 overflow-hidden max-h-[90vh] overflow-y-auto">
         {/* Decorative top gradient bar */}
         <div className="h-1 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500" />
 
-        <div className="p-6 text-center">
-          {/* Trophy icon */}
-          <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center mb-5 shadow-lg shadow-amber-500/30">
-            <Trophy size={28} className="text-white" />
-          </div>
-
-          <h2 className="text-xl font-bold text-white mb-1">Match Complete</h2>
-          <p className="text-slate-400 text-sm mb-6">
-            <span className="text-white font-semibold">{winner}</span> wins the match{" "}
-            <span className="text-emerald-400 font-bold">{playerSets} – {opponentSets}</span>
-          </p>
-
-          {/* Saved confirmation */}
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold mb-6">
-            <Check size={13} className="shrink-0" />
-            <span>All match data has been saved</span>
-          </div>
-
-          {/* Actions */}
-          <div className="space-y-3">
+        {showTransferUI ? (
+          <div className="p-6 text-left">
             <button
-              onClick={() => { triggerHaptic(60); onSave(); }}
-              className="w-full flex items-center justify-center gap-2.5 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-base shadow-lg shadow-emerald-600/30 active:scale-95 transition-all"
+              onClick={() => { triggerHaptic(); setShowTransferUI(false); }}
+              className="mb-4 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-semibold border border-slate-700 hover:text-white transition-all"
             >
-              <Save size={18} />
-              Save & View Recap
+              <ArrowLeft size={14} />
+              Back to Match Summary
             </button>
-
-            <button
-              onClick={() => { triggerHaptic(); onClose(); }}
-              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 text-sm font-medium border border-slate-700 hover:border-slate-600 hover:text-white transition-all"
-            >
-              <Undo2 size={14} />
-              Return to Match
-            </button>
+            <GuestMatchTransferUI
+              matchId={matchId || "guest_match"}
+              matchSummary={{
+                player: playerName,
+                opponent: opponentName,
+                scoreString: `${playerSets} - ${opponentSets}`,
+              }}
+            />
           </div>
-        </div>
+        ) : (
+          <div className="p-6 text-center">
+            {/* Trophy icon */}
+            <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center mb-5 shadow-lg shadow-amber-500/30">
+              <Trophy size={28} className="text-white" />
+            </div>
+
+            <h2 className="text-xl font-bold text-white mb-1">Match Complete</h2>
+            <p className="text-slate-400 text-sm mb-6">
+              <span className="text-white font-semibold">{winner}</span> wins the match{" "}
+              <span className="text-emerald-400 font-bold">{playerSets} – {opponentSets}</span>
+            </p>
+
+            {/* Saved confirmation */}
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold mb-6">
+              <Check size={13} className="shrink-0" />
+              <span>All match data has been saved</span>
+            </div>
+
+            {/* Actions */}
+            <div className="space-y-3">
+              <button
+                onClick={() => { triggerHaptic(60); onSave(); }}
+                className="w-full flex items-center justify-center gap-2.5 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-base shadow-lg shadow-emerald-600/30 active:scale-95 transition-all"
+              >
+                <Save size={18} />
+                Save & View Recap
+              </button>
+
+              <button
+                onClick={() => { triggerHaptic(); handleCloseModal(); }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 text-sm font-medium border border-slate-700 hover:border-slate-600 hover:text-white transition-all"
+              >
+                <Undo2 size={14} />
+                Return to Match
+              </button>
+
+              <button
+                onClick={() => { triggerHaptic(); setShowTransferUI(true); }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 text-sm font-semibold border border-indigo-500/40 hover:border-indigo-500/60 transition-all"
+              >
+                <Send size={15} />
+                Transfer Guest Match
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -568,6 +607,7 @@ export function ScoringInterface() {
 
   const [isFinishModalOpen, setIsFinishModalOpen] = useState(false);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [showSuspendMenu, setShowSuspendMenu] = useState(false);
   const suspendMatch = useMatchStore((s) => s.suspendMatch);
   const router = useRouter();
@@ -640,6 +680,7 @@ export function ScoringInterface() {
           opponentName={opponentLabel}
           playerSets={score.playerSets}
           opponentSets={score.opponentSets}
+          matchId={matchId}
         />
 
         <div className="text-6xl mb-4">🏆</div>
@@ -720,6 +761,16 @@ export function ScoringInterface() {
         <div className="flex items-center gap-2">
           <TiebreakBadge />
 
+          {/* Share QR Code Button */}
+          <button
+            onClick={() => { triggerHaptic(); setIsShareModalOpen(true); }}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 text-xs font-semibold transition-all"
+            title="Share live match"
+          >
+            <QrCode size={13} />
+            <span className="hidden sm:inline">Share</span>
+          </button>
+
           {/* Suspend Match dropdown */}
           <div className="relative">
             <button
@@ -760,6 +811,27 @@ export function ScoringInterface() {
           <SyncIndicator />
         </div>
       </div>
+
+      {/* Share QR Code Modal */}
+      {isShareModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200"
+          onClick={(e) => { if (e.target === e.currentTarget) setIsShareModalOpen(false); }}
+        >
+          <div className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl animate-in zoom-in-95 fade-in duration-200 overflow-hidden relative p-6">
+            <button
+              onClick={() => setIsShareModalOpen(false)}
+              className="absolute top-4 right-4 p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            >
+              <X size={18} />
+            </button>
+            <MatchShareQR
+              matchId={matchId || "live_match"}
+              token="dummy_token_for_now"
+            />
+          </div>
+        </div>
+      )}
 
       <ScoreDisplay />
 
