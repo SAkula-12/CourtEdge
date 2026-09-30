@@ -90,9 +90,20 @@ interface UndoSnapshot {
   previousMatchStatus?: 'IN_PROGRESS' | 'COMPLETED' | 'SUSPENDED';
 }
 
+export type UserRole = 'PRIMARY' | 'CO_SCORER' | 'OBSERVER' | 'SPECTATOR';
+
+export interface ApprovalRequest {
+  id: string;
+  type: 'END_MATCH' | 'SUSPEND_MATCH';
+  status: 'PENDING' | 'APPROVED' | 'DENIED';
+  reason?: string;
+  requestedBy?: string;
+  requestedAt: string;
+}
+
 interface MatchState {
   // Role
-  role: 'PRIMARY' | 'OBSERVER';
+  role: UserRole;
 
   // State
   phase: 'IDLE' | 'SETUP' | 'PLAYING' | 'POINT_DETAIL' | 'SHOT_DETAIL' | 'FINISHED';
@@ -107,6 +118,12 @@ interface MatchState {
   currentGameId: string | null;
   pointsInGame: number;
   setsPlayed: DBSet[];
+
+  // Approval requests (Co-Scorer Guardrail)
+  pendingApprovalRequest: ApprovalRequest | null;
+  waitingForApproval: ApprovalRequest | null;
+  setPendingApprovalRequest: (req: ApprovalRequest | null) => void;
+  setWaitingForApproval: (req: ApprovalRequest | null) => void;
 
   // Point-level metadata (Section 16 & 18)
   pendingPointNote: string;
@@ -142,7 +159,7 @@ interface MatchState {
   resolveMatchTiebreakDecision: (playMatchTiebreak: boolean, targetPoints?: number) => Promise<void>;
   cancelPointDetail: () => void;
   getPointLabel: (side: 'PLAYER' | 'OPPONENT') => string;
-  setRole: (role: 'PRIMARY' | 'OBSERVER') => void;
+  setRole: (role: UserRole) => void;
 
   // New actions
   setPointNote: (note: string) => void;
@@ -357,6 +374,10 @@ const initialScore: LiveScore = {
 export const useMatchStore = create<MatchState>((set, get) => ({
   role: 'PRIMARY',
   setRole: (role) => set({ role }),
+  pendingApprovalRequest: null,
+  waitingForApproval: null,
+  setPendingApprovalRequest: (pendingApprovalRequest) => set({ pendingApprovalRequest }),
+  setWaitingForApproval: (waitingForApproval) => set({ waitingForApproval }),
   phase: 'IDLE',
   matchId: null,
   setup: null,
@@ -496,11 +517,12 @@ export const useMatchStore = create<MatchState>((set, get) => ({
   confirmPoint: async (classification, shotType) => {
     const state = get();
     
-    if (state.role === 'OBSERVER' && state.matchId) {
+    if ((state.role === 'OBSERVER' || state.role === 'CO_SCORER') && state.matchId) {
       const bc = new BroadcastChannel(`courtedge-live-score-${state.matchId}`);
       bc.postMessage({
-        type: 'OBSERVER_OBSERVATION',
+        type: 'OBSERVER_CONFIRM_POINT',
         payload: {
+          winner: state.pendingPointWinner,
           classification,
           shotType,
           note: state.pendingPointNote,
@@ -1017,7 +1039,7 @@ export const useMatchStore = create<MatchState>((set, get) => ({
   undoLastPoint: async () => {
     const state = get();
 
-    if (state.role === 'OBSERVER' && state.matchId) {
+    if ((state.role === 'OBSERVER' || state.role === 'CO_SCORER') && state.matchId) {
       const bc = new BroadcastChannel(`courtedge-live-score-${state.matchId}`);
       bc.postMessage({
         type: 'OBSERVER_UNDO_POINT',

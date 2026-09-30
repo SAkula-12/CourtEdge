@@ -65,12 +65,12 @@ export default function LiveScorePage({ params }: { params: Promise<{ matchId: s
     <div className="flex flex-col min-h-screen bg-slate-950 text-slate-200">
       <div className="p-2 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center justify-center gap-2">
         <ShieldCheck size={16} className="text-emerald-400" />
-        <span className="text-xs font-semibold text-emerald-400 uppercase tracking-widest">
-          Secure Observer Mode Active
+        <span className="text-xs font-semibold text-indigo-400 uppercase tracking-widest">
+          Secure Co-Scorer Mode Active
         </span>
       </div>
       <div className="flex-1 w-full max-w-lg mx-auto relative">
-        <ScoringInterface role="OBSERVER" />
+        <ScoringInterface role="CO_SCORER" />
       </div>
     </div>
   );

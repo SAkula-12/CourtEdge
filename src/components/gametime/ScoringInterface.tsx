@@ -2,9 +2,9 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { useMatchStore } from "@/stores/matchStore";
+import { useMatchStore, ApprovalRequest } from "@/stores/matchStore";
 import { PointClassification } from "@/models/types";
-import { Undo2, CheckCircle2, ArrowRight, Check, X, RotateCcw, Trophy, Save, Mic, MicOff, MessageSquare, PauseCircle, CloudRain, ChevronDown, ArrowLeftRight, QrCode, Send, ArrowLeft } from "lucide-react";
+import { Undo2, CheckCircle2, ArrowRight, Check, X, RotateCcw, Trophy, Save, Mic, MicOff, MessageSquare, PauseCircle, CloudRain, ChevronDown, ArrowLeftRight, QrCode, Send, ArrowLeft, Loader2, ShieldAlert, AlertCircle } from "lucide-react";
 import { CriticalPointFlags } from "./CriticalPointFlags";
 import { PressurePrompt } from "./PressurePrompt";
 import { NotesPanel } from "./NotesPanel";
@@ -12,7 +12,7 @@ import { SyncIndicator } from "./SyncIndicator";
 import { FlaggedPointsSummary } from "./FlaggedPointsSummary";
 import { NotesLog } from "./NotesLog";
 import { FinishMatchModal } from "./FinishMatchModal";
-import { MatchShareQR } from "@/components/share/MatchShareQR";
+import { MatchShareModal } from "@/components/share/MatchShareModal";
 import { GuestMatchTransferUI } from "./GuestMatchTransferUI";
 import { PlayByPlayTimeline } from "./PlayByPlayTimeline";
 import { triggerHaptic } from "@/lib/haptics";
@@ -302,7 +302,7 @@ const SHOT_TYPES = [
 
 /* ---------- Score Display ---------- */
 
-function ScoreDisplay() {
+export function ScoreDisplay() {
   const score = useMatchStore((s) => s.score);
   const setup = useMatchStore((s) => s.setup);
   const getPointLabel = useMatchStore((s) => s.getPointLabel);
@@ -407,7 +407,7 @@ function ManualSwitchButton() {
 
 /* ---------- Court Side Indicator ---------- */
 
-function CourtSideIndicator() {
+export function CourtSideIndicator() {
   const courtSide = useMatchStore((s) => s.courtSide);
   const score = useMatchStore((s) => s.score);
   const setup = useMatchStore((s) => s.setup);
@@ -439,7 +439,7 @@ function CourtSideIndicator() {
 
 /* ---------- Tiebreak / Match Tiebreak Badge ---------- */
 
-function TiebreakBadge() {
+export function TiebreakBadge() {
   const score = useMatchStore((s) => s.score);
   const target = score.tiebreakTargetPoints || (score.isMatchTiebreak ? 10 : 7);
 
@@ -775,7 +775,7 @@ function MatchCompletionModal({
 
 /* ---------- Main Scoring Interface ---------- */
 
-export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBSERVER' }) {
+export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'CO_SCORER' | 'OBSERVER' }) {
   const { phase, setup, pendingPointWinner, score, canUndo, matchId } = useMatchStore();
   const selectPointWinner = useMatchStore((s) => s.selectPointWinner);
   const selectClassification = useMatchStore((s) => s.selectClassification);
@@ -786,6 +786,11 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
   const resetMatch = useMatchStore((s) => s.resetMatch);
   const setRole = useMatchStore((s) => s.setRole);
 
+  const pendingApprovalRequest = useMatchStore((s) => s.pendingApprovalRequest);
+  const setPendingApprovalRequest = useMatchStore((s) => s.setPendingApprovalRequest);
+  const waitingForApproval = useMatchStore((s) => s.waitingForApproval);
+  const setWaitingForApproval = useMatchStore((s) => s.setWaitingForApproval);
+
   useEffect(() => {
     setRole(role);
   }, [role, setRole]);
@@ -794,11 +799,112 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
   const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [showSuspendMenu, setShowSuspendMenu] = useState(false);
+  const [coScorerConfirmModal, setCoScorerConfirmModal] = useState<{
+    type: 'END_MATCH' | 'SUSPEND_MATCH';
+    title: string;
+    message: string;
+  } | null>(null);
+  const [denialNotice, setDenialNotice] = useState<string | null>(null);
+
   const suspendMatch = useMatchStore((s) => s.suspendMatch);
   const router = useRouter();
 
   const playerLabel = setup?.playerName || "Player";
   const opponentLabel = setup?.opponentName || "Opponent";
+
+  /* ---- Suspend Match handler ---- */
+  const handleSuspend = useCallback(async () => {
+    triggerHaptic(60);
+    setShowSuspendMenu(false);
+    await suspendMatch();
+    router.push('/gametime');
+  }, [suspendMatch, router]);
+
+  /* ---- Guardrail Approval Flow Handlers ---- */
+  const sendApprovalRequest = useCallback((type: 'END_MATCH' | 'SUSPEND_MATCH') => {
+    if (!matchId) return;
+    const req: ApprovalRequest = {
+      id: crypto.randomUUID(),
+      type,
+      status: 'PENDING',
+      requestedBy: 'Co-Scorer',
+      requestedAt: new Date().toISOString(),
+    };
+    setWaitingForApproval(req);
+    setCoScorerConfirmModal(null);
+
+    const bc = new BroadcastChannel(`courtedge-live-score-${matchId}`);
+    bc.postMessage({ type: 'APPROVAL_REQUEST', request: req });
+    bc.close();
+  }, [matchId, setWaitingForApproval]);
+
+  const cancelApprovalRequest = useCallback(() => {
+    if (!matchId || !waitingForApproval) return;
+    const bc = new BroadcastChannel(`courtedge-live-score-${matchId}`);
+    bc.postMessage({ type: 'APPROVAL_CANCEL', requestId: waitingForApproval.id });
+    bc.close();
+    setWaitingForApproval(null);
+  }, [matchId, waitingForApproval, setWaitingForApproval]);
+
+  const handleApprove = useCallback(async () => {
+    if (!matchId || !pendingApprovalRequest) return;
+    const req = pendingApprovalRequest;
+    const bc = new BroadcastChannel(`courtedge-live-score-${matchId}`);
+    bc.postMessage({
+      type: 'APPROVAL_RESPONSE',
+      requestId: req.id,
+      status: 'APPROVED',
+      actionType: req.type,
+    });
+    bc.close();
+    setPendingApprovalRequest(null);
+
+    if (req.type === 'END_MATCH') {
+      await finishMatch('COMPLETED');
+    } else if (req.type === 'SUSPEND_MATCH') {
+      await suspendMatch();
+      router.push('/gametime');
+    }
+  }, [matchId, pendingApprovalRequest, setPendingApprovalRequest, finishMatch, suspendMatch, router]);
+
+  const handleDeny = useCallback(() => {
+    if (!matchId || !pendingApprovalRequest) return;
+    const req = pendingApprovalRequest;
+    const bc = new BroadcastChannel(`courtedge-live-score-${matchId}`);
+    bc.postMessage({
+      type: 'APPROVAL_RESPONSE',
+      requestId: req.id,
+      status: 'DENIED',
+      actionType: req.type,
+    });
+    bc.close();
+    setPendingApprovalRequest(null);
+  }, [matchId, pendingApprovalRequest, setPendingApprovalRequest]);
+
+  const handleGameDoneClick = useCallback(() => {
+    if (role === 'CO_SCORER') {
+      setCoScorerConfirmModal({
+        type: 'END_MATCH',
+        title: 'Request to End Match?',
+        message: 'As a Co-Scorer, ending the match requires approval from the Primary Recorder. Would you like to send this request?',
+      });
+    } else {
+      setIsFinishModalOpen(true);
+    }
+  }, [role]);
+
+  const handleSuspendClick = useCallback(() => {
+    setShowSuspendMenu(false);
+    if (role === 'CO_SCORER') {
+      setCoScorerConfirmModal({
+        type: 'SUSPEND_MATCH',
+        title: 'Request to Suspend Match?',
+        message: 'As a Co-Scorer, suspending the match requires approval from the Primary Recorder. Would you like to send this request?',
+      });
+    } else {
+      handleSuspend();
+    }
+  }, [role, handleSuspend]);
 
   /* ---- Screen Wake Lock (Specification 1) ---- */
   useEffect(() => {
@@ -849,8 +955,15 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
     
     if (role === 'PRIMARY') {
       const unsub = useMatchStore.subscribe((state, prevState) => {
-        if (state.score !== prevState.score || state.setup !== prevState.setup || state.phase !== prevState.phase || state.pendingDecision !== prevState.pendingDecision) {
+        if (
+          state.score !== prevState.score ||
+          state.setup !== prevState.setup ||
+          state.phase !== prevState.phase ||
+          state.pendingDecision !== prevState.pendingDecision ||
+          state.canUndo !== prevState.canUndo
+        ) {
           const serializableState = {
+            matchId: state.matchId,
             setup: state.setup,
             score: state.score,
             targetGames: state.targetGames,
@@ -862,6 +975,7 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
             courtSide: state.courtSide,
             pressureContext: state.pressureContext,
             phase: state.phase,
+            canUndo: state.canUndo,
             isRecovering: state.isRecovering,
           };
           bc.postMessage({ type: 'SYNC_STATE', state: serializableState });
@@ -870,6 +984,7 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
 
       const currentState = useMatchStore.getState();
       const initialSerializableState = {
+        matchId: currentState.matchId,
         setup: currentState.setup,
         score: currentState.score,
         targetGames: currentState.targetGames,
@@ -881,6 +996,7 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
         courtSide: currentState.courtSide,
         pressureContext: currentState.pressureContext,
         phase: currentState.phase,
+        canUndo: currentState.canUndo,
         isRecovering: currentState.isRecovering,
       };
       bc.postMessage({ type: 'SYNC_STATE', state: initialSerializableState });
@@ -899,6 +1015,10 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
           await useMatchStore.getState().undoLastPoint();
         } else if (event.data.type === 'OBSERVER_OBSERVATION') {
           console.log('[Mock Backend] Received observer observation:', event.data.payload);
+        } else if (event.data.type === 'APPROVAL_REQUEST') {
+          setPendingApprovalRequest(event.data.request);
+        } else if (event.data.type === 'APPROVAL_CANCEL') {
+          setPendingApprovalRequest(null);
         }
       };
 
@@ -913,6 +1033,7 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
           const s = event.data.state;
           useMatchStore.setState((prev) => ({
             ...prev,
+            matchId: s.matchId || prev.matchId,
             setup: s.setup,
             score: s.score,
             targetGames: s.targetGames,
@@ -923,24 +1044,30 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
             setsPlayed: s.setsPlayed,
             courtSide: s.courtSide,
             pressureContext: s.pressureContext,
+            canUndo: s.canUndo ?? prev.canUndo,
             // Only sync phase if we aren't currently logging a point
             phase: (prev.phase === 'POINT_DETAIL' || prev.phase === 'SHOT_DETAIL') ? prev.phase : s.phase,
             isRecovering: false,
           }));
+        } else if (event.data.type === 'APPROVAL_RESPONSE') {
+          const { requestId, status, actionType } = event.data;
+          const currentWaiting = useMatchStore.getState().waitingForApproval;
+          if (currentWaiting && currentWaiting.id === requestId) {
+            setWaitingForApproval(null);
+            if (status === 'APPROVED') {
+              if (actionType === 'SUSPEND_MATCH') {
+                router.push('/gametime');
+              }
+            } else if (status === 'DENIED') {
+              setDenialNotice(`The Primary Recorder denied your request to ${actionType === 'END_MATCH' ? 'End Match' : 'Suspend Match'}.`);
+            }
+          }
         }
       };
 
       return () => bc.close();
     }
-  }, [matchId, role]);
-
-  /* ---- Suspend Match handler ---- */
-  const handleSuspend = useCallback(async () => {
-    triggerHaptic(60);
-    setShowSuspendMenu(false);
-    await suspendMatch();
-    router.push('/gametime');
-  }, [suspendMatch, router]);
+  }, [matchId, role, router, setPendingApprovalRequest, setWaitingForApproval]);
 
   /* ---- Match finished ---- */
   if (phase === "FINISHED") {
@@ -1058,6 +1185,7 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
               </button>
 
               {/* Suspend Match dropdown */}
+              {/* Suspend Match dropdown */}
               <div className="relative">
                 <button
                   onClick={() => { triggerHaptic(); setShowSuspendMenu(!showSuspendMenu); }}
@@ -1072,7 +1200,7 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
                     <div className="fixed inset-0 z-40" onClick={() => setShowSuspendMenu(false)} />
                     <div className="absolute right-0 top-full mt-1 z-50 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl shadow-black/40 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
                       <button
-                        onClick={handleSuspend}
+                        onClick={handleSuspendClick}
                         className="w-full flex items-center gap-3 px-4 py-3 text-sm text-amber-300 hover:bg-amber-500/10 transition-colors text-left"
                       >
                         <CloudRain size={16} className="shrink-0 text-amber-400" />
@@ -1087,7 +1215,7 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
               </div>
 
               <button
-                onClick={() => { triggerHaptic(); setIsFinishModalOpen(true); }}
+                onClick={() => { triggerHaptic(); handleGameDoneClick(); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-semibold transition-all"
                 title="Finish match options"
               >
@@ -1100,23 +1228,125 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
         </div>
       </div>
 
-      {/* Share QR Code Modal */}
-      {isShareModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200"
-          onClick={(e) => { if (e.target === e.currentTarget) setIsShareModalOpen(false); }}
-        >
-          <div className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl animate-in zoom-in-95 fade-in duration-200 overflow-hidden relative p-6">
+      {/* Split-Screen Match Share Modal */}
+      <MatchShareModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        matchId={matchId || "live_match"}
+      />
+
+      {/* Denial Notification Toast */}
+      {denialNotice && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 max-w-md w-[92%] p-4 rounded-2xl bg-rose-950/95 border border-rose-500/50 shadow-2xl shadow-rose-950/50 text-rose-200 flex items-start gap-3 animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="w-8 h-8 rounded-xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center shrink-0 text-rose-400 mt-0.5">
+            <AlertCircle size={18} />
+          </div>
+          <div className="flex-1 text-xs">
+            <div className="font-bold text-white text-sm mb-0.5">Request Rejected</div>
+            <div className="text-rose-200/90 leading-relaxed">{denialNotice}</div>
+          </div>
+          <button
+            onClick={() => setDenialNotice(null)}
+            className="p-1 rounded-lg text-rose-400 hover:text-white hover:bg-rose-900/50 transition-colors"
+            title="Close notification"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
+      {/* Co-Scorer Confirmation Modal (Are you sure prompt) */}
+      {coScorerConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-sm bg-slate-900 border border-slate-700/80 rounded-3xl p-6 text-center shadow-2xl shadow-black/60 animate-in zoom-in-95 duration-200">
+            <div className="mx-auto w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mb-4 shadow-md shadow-amber-500/5">
+              <ShieldAlert size={28} />
+            </div>
+            <div className="inline-block px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px] font-bold uppercase tracking-wider mb-2">
+              Co-Scorer Confirmation
+            </div>
+            <h3 className="text-lg font-bold text-white mb-2">{coScorerConfirmModal.title}</h3>
+            <p className="text-xs text-slate-300 leading-relaxed mb-6">
+              {coScorerConfirmModal.message}
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => { triggerHaptic(30); setCoScorerConfirmModal(null); }}
+                className="py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-semibold border border-slate-700 active:scale-95 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { triggerHaptic(60); sendApprovalRequest(coScorerConfirmModal.type); }}
+                className="py-3 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold shadow-lg shadow-amber-600/30 active:scale-95 transition-all"
+              >
+                Yes, Request
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Co-Scorer Waiting for Primary Approval Spinner Overlay */}
+      {waitingForApproval && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-sm bg-slate-900 border border-indigo-500/40 rounded-3xl p-6 text-center shadow-2xl shadow-indigo-500/10 animate-in zoom-in-95 duration-200">
+            <div className="relative mx-auto w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400 mb-4">
+              <Loader2 size={32} className="animate-spin text-indigo-400" />
+            </div>
+            <div className="inline-block px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 text-[10px] font-bold uppercase tracking-wider mb-2">
+              Awaiting Approval
+            </div>
+            <h3 className="text-lg font-bold text-white mb-2">Request Submitted</h3>
+            <p className="text-xs text-slate-300 leading-relaxed mb-6">
+              Waiting for Primary Recorder to approve request to{" "}
+              <span className="font-semibold text-indigo-300">
+                {waitingForApproval.type === 'END_MATCH' ? 'End the Match' : 'Suspend the Match'}
+              </span>
+              ...
+            </p>
             <button
-              onClick={() => setIsShareModalOpen(false)}
-              className="absolute top-4 right-4 p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              onClick={() => { triggerHaptic(40); cancelApprovalRequest(); }}
+              className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 active:scale-95 transition-all"
             >
-              <X size={18} />
+              Cancel Request
             </button>
-            <MatchShareQR
-              matchId={matchId || "live_match"}
-              token="dummy_token_for_now"
-            />
+          </div>
+        </div>
+      )}
+
+      {/* Primary Recorder Guardrail Approval Modal */}
+      {pendingApprovalRequest && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-slate-900 border border-amber-500/50 rounded-3xl p-6 text-center shadow-2xl shadow-amber-500/15 animate-in zoom-in-95 duration-200">
+            <div className="mx-auto w-16 h-16 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 mb-4 animate-bounce">
+              <ShieldAlert size={32} />
+            </div>
+            <div className="inline-block px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px] font-bold uppercase tracking-wider mb-2">
+              Co-Scorer Guardrail
+            </div>
+            <h3 className="text-lg font-bold text-white mb-2">Action Approval Required</h3>
+            <p className="text-sm text-slate-300 leading-relaxed mb-6">
+              A Co-Scorer has requested to{" "}
+              <span className="font-bold text-amber-300">
+                {pendingApprovalRequest.type === 'END_MATCH' ? 'End Match' : 'Suspend Match'}
+              </span>
+              . Do you approve this action?
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => { triggerHaptic(40); handleDeny(); }}
+                className="py-3 px-4 rounded-xl bg-slate-800 hover:bg-rose-950/60 hover:border-rose-500/40 text-rose-300 text-sm font-semibold border border-slate-700 active:scale-95 transition-all"
+              >
+                Deny
+              </button>
+              <button
+                onClick={() => { triggerHaptic(60); handleApprove(); }}
+                className="py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold shadow-lg shadow-emerald-600/30 active:scale-95 transition-all"
+              >
+                Approve
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1175,7 +1405,7 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
               ) : (
                 !canUndo ? (
                   <button
-                    onClick={() => { triggerHaptic(); setIsFinishModalOpen(true); }}
+                    onClick={() => { triggerHaptic(); handleGameDoneClick(); }}
                     className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 text-sm font-semibold transition-all shadow-md active:scale-95"
                   >
                     <CheckCircle2 size={15} />
@@ -1191,7 +1421,7 @@ export function ScoringInterface({ role = 'PRIMARY' }: { role?: 'PRIMARY' | 'OBS
                       Undo Last Point
                     </button>
                     <button
-                      onClick={() => { triggerHaptic(); setIsFinishModalOpen(true); }}
+                      onClick={() => { triggerHaptic(); handleGameDoneClick(); }}
                       className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 text-sm font-semibold transition-all"
                     >
                       <CheckCircle2 size={15} />
