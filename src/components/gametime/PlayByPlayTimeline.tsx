@@ -20,6 +20,7 @@ interface TimelineItem {
   note?: string;
   flags: string[];
   timestamp: string;
+  server: "PLAYER" | "OPPONENT";
 }
 
 function formatClassification(cls: string): string {
@@ -46,6 +47,7 @@ export function PlayByPlayTimeline() {
 
   const [items, setItems] = useState<TimelineItem[]>([]);
   const [isExpanded, setIsExpanded] = useState(true);
+  const [expandedPointIds, setExpandedPointIds] = useState<Record<string, boolean>>({});
 
   const playerName = setup?.playerName || "Player";
   const opponentName = setup?.opponentName || "Opponent";
@@ -120,6 +122,7 @@ export function PlayByPlayTimeline() {
             note: pt.note,
             flags: parsedFlags,
             timestamp: pt.timestamp,
+            server: pt.server,
           });
 
           if (game.isTiebreak) {
@@ -213,19 +216,32 @@ export function PlayByPlayTimeline() {
               No points recorded yet. Log a point to start the live ticker.
             </div>
           ) : (
-            items.map((item) => (
+            items.map((item) => {
+              const isPointExpanded = !!expandedPointIds[item.id];
+              return (
               <div
                 key={item.id}
-                className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/80 hover:border-slate-700 transition-all flex flex-col gap-1.5"
+                onClick={() => setExpandedPointIds((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
+                className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/80 hover:border-slate-700 transition-all flex flex-col gap-1.5 cursor-pointer"
               >
                 {/* Top Row: Score context & Timestamp */}
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-mono font-semibold text-slate-300 bg-slate-800 px-2 py-0.5 rounded-md border border-slate-700/50">
                     {item.scoreContext}
                   </span>
-                  <span className="text-[11px] font-semibold text-slate-400">
-                    Point #{item.pointNumber}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <div className="text-right">
+                      <div className="text-[11px] font-semibold text-slate-400">
+                        Game {item.gameNumber}, Point {item.pointNumber}
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        Server: {item.server === "PLAYER" ? playerName : opponentName}
+                      </div>
+                    </div>
+                    <div className="text-slate-500 flex items-center justify-center">
+                      {isPointExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    </div>
+                  </div>
                 </div>
 
                 {/* Main Row: Winner & Classification */}
@@ -242,6 +258,22 @@ export function PlayByPlayTimeline() {
                   </div>
 
                   <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                    {item.flags && item.flags.map((flag) => {
+                      let flagColor = "bg-slate-500/10 text-slate-300 border-slate-500/20";
+                      if (flag === "CRITICAL") flagColor = "bg-red-500/10 text-red-400 border-red-500/20";
+                      else if (flag === "IMPORTANT") flagColor = "bg-orange-500/10 text-orange-400 border-orange-500/20";
+                      else if (flag === "WORTH REVIEWING") flagColor = "bg-amber-500/10 text-amber-400 border-amber-500/20";
+                      else if (flag === "SYSTEM DETECTED") flagColor = "bg-blue-500/10 text-blue-400 border-blue-500/20";
+                      
+                      return (
+                        <span key={flag} className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${flagColor}`}>
+                          {flag}
+                        </span>
+                      );
+                    })}
+                    {item.note && !isPointExpanded && (
+                      <MessageSquare size={14} className="text-slate-400" />
+                    )}
                     <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-300 border border-blue-500/20">
                       {item.classificationLabel}
                     </span>
@@ -257,11 +289,25 @@ export function PlayByPlayTimeline() {
                 {item.note && (
                   <div className="mt-1 flex items-start gap-1.5 text-xs text-slate-300 bg-slate-900/80 px-2.5 py-1.5 rounded-lg border border-slate-800">
                     <MessageSquare size={13} className="text-blue-400 shrink-0 mt-0.5" />
-                    <span className="italic">{item.note}</span>
+                    <span className={`italic ${isPointExpanded ? "" : "line-clamp-1"}`}>{item.note}</span>
+                  </div>
+                )}
+
+                {/* Expanded Details */}
+                {isPointExpanded && (
+                  <div className="mt-2 pt-2 border-t border-slate-800/50 flex flex-col gap-1 text-[11px] text-slate-400">
+                    <div className="flex justify-between">
+                      <span>Logged: {new Date(item.timestamp).toLocaleTimeString()}</span>
+                      <span>Observer: Scorer</span>
+                    </div>
+                    {item.shotTypeLabel && (
+                      <div>Shot Breakdown: {item.shotTypeLabel}</div>
+                    )}
                   </div>
                 )}
               </div>
-            ))
+            );
+            })
           )}
         </div>
       )}
