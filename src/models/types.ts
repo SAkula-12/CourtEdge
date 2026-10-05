@@ -22,6 +22,13 @@ export interface User {
   createdAt: Date;
 }
 
+/** Parent/guardian consent record (PRD Section 49 — Junior Safety) */
+export interface ParentConsent {
+  parentEmail?: string;
+  isApproved: boolean;
+  dataSharingAllowed: boolean;
+}
+
 export interface PlayerProfile {
   id: string;
   userId: string;
@@ -31,7 +38,20 @@ export interface PlayerProfile {
   dominantHand?: 'LEFT' | 'RIGHT';
   backhandType?: 'ONE_HANDED' | 'TWO_HANDED';
   location?: string;
+  yearsPlaying?: number;
   competitiveStatus?: 'COMPETITIVE' | 'RECREATIONAL';
+  /** Primary development goal (PRD Section 9) */
+  primaryGoal?: string;
+  /** Specific sub-goals feeding into AI recommendations */
+  subGoals?: string[];
+  /** Self-identified weaknesses for AI focus areas */
+  selfIdentifiedWeaknesses?: string[];
+  /** Computed — true when age < 18 */
+  isMinor?: boolean;
+  /** Parent/guardian consent info (PRD Section 49) */
+  parentConsent?: ParentConsent;
+  /** Whether the multi-step onboarding has been completed */
+  onboardingComplete?: boolean;
   createdAt: Date;
 }
 
