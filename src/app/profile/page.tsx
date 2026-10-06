@@ -173,7 +173,7 @@ export default function ProfilePage() {
                 {profile.location && (
                   <span className="flex items-center gap-1 text-sm text-slate-400">
                     <MapPin size={14} className="text-slate-500" />
-                    {profile.location}
+                    {profile.location.cityName}, {profile.location.country}
                   </span>
                 )}
                 {profile.utr !== undefined && (
@@ -378,7 +378,7 @@ export default function ProfilePage() {
                     <span className="text-sm text-slate-300">
                       Parent Consent
                     </span>
-                    {profile.parentConsent?.isApproved ? (
+                    {profile.parentConsent?.status === 'APPROVED' ? (
                       <span className="flex items-center gap-1 text-xs font-semibold text-emerald-400">
                         <CheckCircle2 size={13} />
                         Approved
@@ -406,7 +406,7 @@ export default function ProfilePage() {
                     <span className="text-sm text-slate-300">
                       Coach Data Sharing
                     </span>
-                    {profile.parentConsent?.dataSharingAllowed ? (
+                    {profile.parentConsent?.permissions.matchDataSharing ? (
                       <span className="flex items-center gap-1 text-xs font-medium text-emerald-400">
                         <Eye size={13} />
                         Enabled

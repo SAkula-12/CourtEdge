@@ -22,11 +22,26 @@ export interface User {
   createdAt: Date;
 }
 
+/** Granular permissions for minors (PRD Section 49) */
+export interface ParentPermissions {
+  publicNameDisplay: boolean;
+  matchDataSharing: boolean;
+  locationProcessing: boolean;
+  recruitingDiscoverability: boolean;
+}
+
 /** Parent/guardian consent record (PRD Section 49 — Junior Safety) */
 export interface ParentConsent {
   parentEmail?: string;
-  isApproved: boolean;
-  dataSharingAllowed: boolean;
+  status: 'PENDING' | 'APPROVED' | 'DENIED';
+  permissions: ParentPermissions;
+}
+
+export interface LocationData {
+  cityName: string;
+  country: string;
+  lat: number;
+  lng: number;
 }
 
 export interface PlayerProfile {
@@ -37,7 +52,7 @@ export interface PlayerProfile {
   utr?: number;
   dominantHand?: 'LEFT' | 'RIGHT';
   backhandType?: 'ONE_HANDED' | 'TWO_HANDED';
-  location?: string;
+  location?: LocationData;
   yearsPlaying?: number;
   competitiveStatus?: 'COMPETITIVE' | 'RECREATIONAL';
   /** Primary development goal (PRD Section 9) */

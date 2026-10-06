@@ -13,7 +13,8 @@ import {
   Shield,
 } from 'lucide-react';
 import { useProfileStore } from '@/stores/profileStore';
-import type { PlayerProfile, ParentConsent } from '@/models/types';
+import type { PlayerProfile, ParentConsent, LocationData } from '@/models/types';
+import GlobalCitySearch from '@/components/profile/GlobalCitySearch';
 
 /* ------------------------------------------------------------------ */
 /*  Pre-set chip options                                               */
@@ -150,7 +151,7 @@ export default function OnboardingWizard({
   /* ---------- form state ---------- */
   const [name, setName] = useState(existingProfile?.name ?? '');
   const [age, setAge] = useState<number | ''>(existingProfile?.age ?? '');
-  const [location, setLocation] = useState(existingProfile?.location ?? '');
+  const [location, setLocation] = useState<LocationData | undefined>(existingProfile?.location);
   const [utr, setUtr] = useState<number | ''>(existingProfile?.utr ?? '');
   const [dominantHand, setDominantHand] = useState<string | undefined>(
     existingProfile?.dominantHand
@@ -181,15 +182,14 @@ export default function OnboardingWizard({
   const [parentEmail, setParentEmail] = useState(
     existingProfile?.parentConsent?.parentEmail ?? ''
   );
-  const [dataSharingAllowed, setDataSharingAllowed] = useState(
-    existingProfile?.parentConsent?.dataSharingAllowed ?? false
-  );
 
   /* ---------- step validation ---------- */
   const canProceed = useCallback((): boolean => {
     switch (currentStep) {
       case 0:
-        return name.trim().length >= 2 && typeof age === 'number' && age > 0;
+        if (name.trim().length < 2 || typeof age !== 'number' || age <= 0 || !location) return false;
+        if (isMinor && (!parentEmail || parentEmail.trim().length === 0)) return false;
+        return true;
       case 1:
         return !!dominantHand && !!backhandType;
       case 2:
@@ -228,8 +228,13 @@ export default function OnboardingWizard({
 
     const parentConsent: ParentConsent = {
       parentEmail: parentEmail || undefined,
-      isApproved: false,
-      dataSharingAllowed,
+      status: 'PENDING',
+      permissions: {
+        publicNameDisplay: true,
+        matchDataSharing: true,
+        locationProcessing: true,
+        recruitingDiscoverability: true,
+      }
     };
 
     const profile: PlayerProfile = {
@@ -237,7 +242,7 @@ export default function OnboardingWizard({
       userId: existingProfile?.userId ?? 'local-user',
       name: name.trim(),
       age: typeof age === 'number' ? age : undefined,
-      location: location.trim() || undefined,
+      location: location,
       utr: typeof utr === 'number' ? utr : undefined,
       dominantHand: dominantHand as 'LEFT' | 'RIGHT',
       backhandType: backhandType as 'ONE_HANDED' | 'TWO_HANDED',
@@ -372,6 +377,9 @@ export default function OnboardingWizard({
                     max={99}
                     className="w-full bg-slate-800/60 border border-slate-700/50 rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/40 transition-all"
                   />
+                  <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
+                    We ask for your age to find the best tournaments for your specific age division (e.g., U14, U16, U18, or Adult leagues) and provide relevant development benchmarks.
+                  </p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-300 mb-1.5">
@@ -395,15 +403,16 @@ export default function OnboardingWizard({
 
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">
-                  Approximate Location
+                  Location <span className="text-red-400">*</span>
                 </label>
-                <input
-                  type="text"
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  placeholder="e.g., Atlanta, GA"
-                  className="w-full bg-slate-800/60 border border-slate-700/50 rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/40 transition-all"
+                <GlobalCitySearch 
+                  value={location} 
+                  onChange={setLocation} 
+                  error={!location && location !== undefined} 
                 />
+                <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
+                  We ask for your location to recommend the closest tournaments, public courts, and playing opportunities near you.
+                </p>
               </div>
 
               {/* Junior safety callout (PRD Section 49) */}
@@ -420,13 +429,13 @@ export default function OnboardingWizard({
                       </p>
                       <p className="text-xs text-amber-400/80 mt-0.5">
                         Players under 18 require parent/guardian consent per our
-                        safety policy.
+                        safety policy. An approval link will be sent.
                       </p>
                     </div>
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-amber-300/80 mb-1.5">
-                      Parent / Guardian Email
+                      Parent / Guardian Email <span className="text-red-400">*</span>
                     </label>
                     <input
                       type="email"
@@ -436,25 +445,6 @@ export default function OnboardingWizard({
                       className="w-full bg-slate-900/60 border border-amber-500/30 rounded-xl px-4 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30 transition-all"
                     />
                   </div>
-                  <label className="flex items-center gap-3 cursor-pointer group">
-                    <div
-                      className={`w-10 h-5 rounded-full transition-all duration-200 relative ${
-                        dataSharingAllowed
-                          ? 'bg-emerald-500'
-                          : 'bg-slate-700'
-                      }`}
-                      onClick={() => setDataSharingAllowed(!dataSharingAllowed)}
-                    >
-                      <div
-                        className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-all duration-200 ${
-                          dataSharingAllowed ? 'left-5' : 'left-0.5'
-                        }`}
-                      />
-                    </div>
-                    <span className="text-xs text-amber-300/80 group-hover:text-amber-300 transition-colors">
-                      Allow data sharing with coaches
-                    </span>
-                  </label>
                 </div>
               )}
             </>
